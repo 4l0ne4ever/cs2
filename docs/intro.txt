@@ -1,0 +1,92 @@
+  ĐỀ TÀI: HỆ THỐNG GIAO DỊCH VẬT PHẨM ẢO TRỰC TUYẾN 
+         "CS2 SKIN TRADING SIMULATOR"
+
+
+I. MÔ TẢ TỔNG QUAN
+
+Hệ thống giao dịch vật phẩm ảo trực tuyến mô phỏng thị trường trao đổi skins 
+(vỏ vũ khí) trong game CS2. Đây là ứng dụng mạng đa người chơi, cho phép người 
+dùng mua bán, trao đổi, và sưu tầm các vật phẩm ảo trong một nền kinh tế mô 
+phỏng có cung cầu thực tế.
+
+Ứng dụng được xây dựng theo mô hình Client-Server sử dụng ngôn ngữ C thuần túy, 
+áp dụng kiến thức lập trình mạng socket, xử lý đa luồng, thiết kế giao thức 
+truyền thông, và quản lý cơ sở dữ liệu.
+
+- Kiến trúc: Client-Server với multi-threading
+- Ngôn ngữ: C thuần túy
+- Database: Binary file-based storage
+- Protocol: TCP Socket với custom message protocol
+- UI: Terminal-based với ANSI colors
+
+
+II. MỤC TIÊU
+
+1. Xây dựng hệ thống mạng ổn định, xử lý được nhiều kết nối đồng thời
+2. Thiết kế giao thức truyền thông hiệu quả cho các thao tác giao dịch
+3. Quản lý trạng thái người chơi, vật phẩm, và giao dịch một cách đồng bộ
+4. Tạo trải nghiệm game hấp dẫn với cơ chế kinh tế cân bằng
+5. Đảm bảo tính toàn vẹn dữ liệu trong môi trường đa luồng
+
+
+III. ĐỐI TƯỢNG NGƯỜI DÙNG
+
+- Người chơi thông thường: Mua bán, trao đổi vật phẩm, tham gia thị trường
+- Trader chuyên nghiệp: Phân tích giá cả, đầu tư, kiếm lời từ chênh lệch giá
+- Người mới: Học cách giao dịch, kiếm skins đầu tiên
+
+
+IV. GAMEPLAY - CÁCH CHƠI
+
+A. KHỞI ĐẦU
+   - Đăng ký tài khoản (username, password - SHA256)
+   - Nhận $100 khởi điểm
+   - Nhận 1 skin miễn phí (Consumer rarity)
+
+B. CÁC HOẠT ĐỘNG CHÍNH
+
+1. Mua bán trên Market (Thị trường tập trung)
+   - Browse danh sách skins đang bán
+   - Mua ngay với giá niêm yết
+   - Bán lên market (nhận 85%, hệ thống thu 15% phí)
+   - Giá cả dao động theo cung cầu real-time
+
+2. P2P Trading (Giao dịch trực tiếp)
+   - Gửi trade offer (items + cash)
+   - Chấp nhận/từ chối offer
+   - Trade tự động thực hiện (atomic operation)
+   - Tất cả items sau trade bị khóa 7 ngày
+
+3. Unboxing Cases (Mở hộp)
+   - Mua case + key ($5-$10.50/case)
+   - Unbox ngẫu nhiên skin theo xác suất:
+     * Contraband (Knife/Glove): 0.26% - $2000-$10000
+     * Covert (Red): 0.64% - $500-$2000
+     * Restricted (Purple): 3.20% - $20-$100
+     * Mil-Spec (Blue): 79.92% - $0.10-$2
+   - Animation spinning
+   - Trade lock 7 ngày cho skin vừa unbox
+
+4. Daily Quests (Nhiệm vụ hàng ngày)
+   - First Steps: +$15 (hoàn thành 3 trades)
+   - Market Explorer: +$10 (mua 5 items)
+   - Lucky Gambler: +$25 + 1 key (unbox 5 cases)
+   - Profit Maker: +$30 (kiếm $50 lợi nhuận)
+   - Social Trader: +$50 (trade với 10 người khác)
+
+5. Trade Lock System
+   - Items mới unbox bị khóa 7 ngày
+   - Items vừa trade bị khóa 7 ngày
+   - Trong thời gian khóa: có thể bán market, không thể trade lại
+   - Sau 7 ngày tự động unlock
+
+
+V. ĐẶC ĐIỂM KỸ THUẬT
+
+- Server: Multi-threaded với pthread
+- Database: Binary files với hash table indexing
+- Protocol: Custom TCP protocol với message types
+- Concurrency: Thread pool + select()
+- Security: SHA256 password hashing, session tokens
+- UI: ANSI colors, box drawing, progress bars
+

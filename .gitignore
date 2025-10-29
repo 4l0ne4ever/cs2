@@ -1,0 +1,36 @@
+# Compiled binaries
+server
+client
+*.o
+*.exe
+
+# Database files
+data/
+*.dat
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.dSYM/
+*.a
+*.so
+
+# Logs
+logs/
+*.log
+
+# Backup files
+*.bak
+*~
+
+# Temporary files
+tmp/
+temp/
+
+Makefile
