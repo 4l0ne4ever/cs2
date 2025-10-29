@@ -8,7 +8,7 @@ client
 data/
 *.dat
 *.log
-
+docs/
 # IDE files
 .vscode/
 .idea/
