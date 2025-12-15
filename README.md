@@ -2,6 +2,8 @@
 
 Hệ thống giao dịch vật phẩm ảo trực tuyến mô phỏng thị trường trao đổi skins trong game CS2.
 
+**Database**: SQLite (dễ debug, query linh hoạt)
+
 ## Cấu trúc Project
 
 ```
@@ -21,6 +23,17 @@ cs2/
 ## Build & Run
 
 ```bash
+# Initialize database với sample data
+make init_db
+
+# View database
+sqlite3 data/database.db
+SELECT * FROM skins;
+
+# Run tests
+make test_auth      # Test authentication
+make test_sqlite    # Test SQLite operations
+
 # Build all
 make
 
@@ -35,8 +48,9 @@ make
 
 - GCC
 - pthread
-- OpenSSL (SHA256)
-- uuid library
+- SQLite3
+- OpenSSL (SHA256) - Optional
+- uuid library - Optional
 
 ## Features
 

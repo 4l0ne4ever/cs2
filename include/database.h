@@ -5,6 +5,7 @@
 
 // Initialize database files
 int db_init();
+void db_close();
 
 // User operations
 int db_save_user(User *user);
@@ -41,5 +42,32 @@ int db_log_transaction(TransactionLog *log);
 int db_save_session(Session *session);
 int db_load_session(const char *token, Session *out_session);
 int db_delete_session(const char *token);
+
+// Skin definition & instance operations (new model)
+int db_load_skin_definition(int definition_id, char *name, float *base_price);
+int db_load_skin_instance(int instance_id, int *definition_id, SkinRarity *rarity, WearCondition *wear, int *pattern_seed, int *is_stattrak, int *owner_id, time_t *acquired_at, int *is_tradable);
+int db_create_skin_instance(int definition_id, SkinRarity rarity, WearCondition wear, int pattern_seed, int is_stattrak, int owner_id, int *out_instance_id);
+int db_update_skin_instance_owner(int instance_id, int new_owner_id);
+int db_get_wear_multiplier(WearCondition wear, float *multiplier);
+int db_get_rarity_multiplier(SkinRarity rarity, float *multiplier);
+float db_calculate_skin_price(int definition_id, SkinRarity rarity, WearCondition wear);
+int db_get_case_skins(int case_id, int *definition_ids, int *count);
+
+// Market listings v2 operations (using instance_id)
+int db_save_listing_v2(int seller_id, int instance_id, float price, int *out_listing_id);
+int db_load_listings_v2(MarketListing *out_listings, int *count);
+int db_get_listing_v2(int listing_id, int *seller_id, int *instance_id, float *price, int *is_sold);
+int db_mark_listing_sold(int listing_id);
+int db_remove_listing_v2(int listing_id);
+
+// Trade lock operations
+int db_check_trade_lock(int instance_id, int *is_locked);
+int db_apply_trade_lock(int instance_id);
+int db_unlock_expired_trades();
+int db_clean_expired_trades();
+
+// Case operations
+int db_load_cases(Case *out_cases, int *count);
+int db_load_case(int case_id, Case *out_case);
 
 #endif // DATABASE_H

@@ -23,14 +23,29 @@ typedef enum
     RARITY_CONTRABAND    // Special (knife/glove)
 } SkinRarity;
 
+// Wear is now a float value (0.00-1.00) instead of enum
+// FN: 0.00-0.07, MW: 0.07-0.15, FT: 0.15-0.38, WW: 0.38-0.45, BS: 0.45-1.00
+typedef float WearCondition; // Float value 0.00-1.00
+
+// Helper enum for wear condition names (for display/UI)
 typedef enum
 {
-    WEAR_FN = 0, // Factory New
-    WEAR_MW,     // Minimal Wear
-    WEAR_FT,     // Field-Tested
-    WEAR_WW,     // Well-Worn
-    WEAR_BS      // Battle-Scarred
-} WearCondition;
+    WEAR_FN = 0, // Factory New (0.00-0.07)
+    WEAR_MW,     // Minimal Wear (0.07-0.15)
+    WEAR_FT,     // Field-Tested (0.15-0.38)
+    WEAR_WW,     // Well-Worn (0.38-0.45)
+    WEAR_BS      // Battle-Scarred (0.45-1.00)
+} WearConditionName;
+
+// Helper function to get wear condition name from float
+static inline WearConditionName get_wear_condition(float wear_float)
+{
+    if (wear_float < 0.07f) return WEAR_FN;
+    if (wear_float < 0.15f) return WEAR_MW;
+    if (wear_float < 0.37f) return WEAR_FT; // Fixed: 0.37 not 0.38
+    if (wear_float < 0.45f) return WEAR_WW;
+    return WEAR_BS;
+}
 
 typedef enum
 {
@@ -69,6 +84,8 @@ typedef struct
     char name[MAX_ITEM_NAME_LEN];
     SkinRarity rarity;
     WearCondition wear;
+    int pattern_seed; // Pattern Template/Paint Seed (0-1000) - CS2 research
+    int is_stattrak;  // 1 = StatTrak™, 0 = Normal (10% chance, except Gold)
     float base_price;
     float current_price;
     int owner_id; // 0 = not owned (in market)

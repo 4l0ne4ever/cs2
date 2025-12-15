@@ -2,6 +2,8 @@
 #define INDEX_H
 
 #include "types.h"
+#include <sys/types.h>
+#include <pthread.h>
 
 // Hash table for fast lookups
 #define HASH_TABLE_SIZE 10007
