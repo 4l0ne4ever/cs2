@@ -45,6 +45,7 @@ int db_delete_session(const char *token);
 
 // Skin definition & instance operations (new model)
 int db_load_skin_definition(int definition_id, char *name, float *base_price);
+int db_load_skin_definition_with_rarity(int definition_id, char *name, float *base_price, SkinRarity *rarity);
 int db_load_skin_instance(int instance_id, int *definition_id, SkinRarity *rarity, WearCondition *wear, int *pattern_seed, int *is_stattrak, int *owner_id, time_t *acquired_at, int *is_tradable);
 int db_create_skin_instance(int definition_id, SkinRarity rarity, WearCondition wear, int pattern_seed, int is_stattrak, int owner_id, int *out_instance_id);
 int db_update_skin_instance_owner(int instance_id, int new_owner_id);
@@ -52,6 +53,14 @@ int db_get_wear_multiplier(WearCondition wear, float *multiplier);
 int db_get_rarity_multiplier(SkinRarity rarity, float *multiplier);
 float db_calculate_skin_price(int definition_id, SkinRarity rarity, WearCondition wear);
 int db_get_case_skins(int case_id, int *definition_ids, int *count);
+int db_get_case_skins_by_rarity(int case_id, SkinRarity rarity, int *definition_ids, int *count);
+
+// Fetch full case info with all skin details (optimized for animation preview)
+// Returns: definition_id, name, rarity, base_price for all skins in case
+// This solves N+1 query problem by loading all data in one query
+// out_skins: Array to store skin info (must be allocated by caller, max 100)
+// out_count: Output parameter for number of skins loaded
+int db_fetch_full_case_info(int case_id, void *out_skins, int *out_count);
 
 // Market listings v2 operations (using instance_id)
 int db_save_listing_v2(int seller_id, int instance_id, float price, int *out_listing_id);
