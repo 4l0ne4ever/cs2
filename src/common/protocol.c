@@ -37,4 +37,7 @@ int validate_message(Message *msg)
     return 1;
 }
 
-// TODO: Implement send_message, receive_message
+// Note: send_message and receive_message are implemented in:
+// - Server side: src/server/request_handler.c (send_response, receive_message)
+// - Client side: src/client/network_client.c (send_message_to_server, receive_message_from_server)
+// These are network I/O functions, not protocol-level functions.

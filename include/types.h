@@ -155,4 +155,15 @@ typedef struct
     int is_active;
 } Session;
 
+// Report System (Phase 7)
+typedef struct
+{
+    int report_id;
+    int reporter_id;      // User who made the report
+    int reported_id;      // User being reported
+    char reason[256];     // Reason for report
+    time_t created_at;    // When report was created
+    int is_resolved;      // 0 = pending, 1 = resolved
+} Report;
+
 #endif // TYPES_H

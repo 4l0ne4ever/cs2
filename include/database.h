@@ -79,4 +79,9 @@ int db_clean_expired_trades();
 int db_load_cases(Case *out_cases, int *count);
 int db_load_case(int case_id, Case *out_case);
 
+// Report operations (Phase 7)
+int db_save_report(Report *report);
+int db_load_reports_for_user(int user_id, Report *out_reports, int *count);
+int db_get_report_count(int user_id);
+
 #endif // DATABASE_H

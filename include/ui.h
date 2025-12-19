@@ -37,4 +37,17 @@ void print_progress_bar(int x, int y, int width, float progress);
 // Rarity colors
 const char *get_rarity_color(SkinRarity rarity);
 
+// Extended UI Functions
+void print_skin(const Skin *skin, int x, int y);
+void print_menu_item(const char *text, int selected, int x, int y);
+void print_header(const char *title);
+void print_separator(int width);
+void print_centered(const char *text, int width);
+void print_error(const char *message);
+void print_success(const char *message);
+void print_info(const char *message);
+void wait_for_key();
+int get_user_input(char *buffer, size_t buffer_size, const char *prompt);
+int get_password_input(char *buffer, size_t buffer_size, const char *prompt);
+
 #endif // UI_H

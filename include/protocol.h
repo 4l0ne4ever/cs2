@@ -46,6 +46,8 @@ typedef struct
 #define MSG_DECLINE_TRADE 0x0023
 #define MSG_CANCEL_TRADE 0x0024
 #define MSG_TRADE_COMPLETED 0x0025
+#define MSG_GET_TRADES 0x0026
+#define MSG_TRADES_DATA 0x0027
 
 // INVENTORY
 #define MSG_GET_INVENTORY 0x0030
@@ -82,5 +84,10 @@ typedef struct
 #define ERR_TRADE_LOCKED 11
 #define ERR_INVALID_REQUEST 12
 #define ERR_DATABASE_ERROR 13
+
+// ==================== PROTOCOL FUNCTIONS ====================
+
+// Calculate CRC32 checksum (implemented in protocol.c)
+uint32_t calculate_checksum(const char *data, int length);
 
 #endif // PROTOCOL_H
