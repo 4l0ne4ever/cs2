@@ -34,3 +34,7 @@ tmp/
 temp/
 
 Makefile
+
+.DS_Store
+.cursor/
+.qodo/
