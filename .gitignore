@@ -1,6 +1,4 @@
 # Compiled binaries
-server
-client
 *.o
 *.exe
 
