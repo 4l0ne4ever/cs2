@@ -116,10 +116,10 @@ static void display_balance_info()
     float total = balance + inv_value;
 
     move_cursor(1, 1);
-    printf("%sBalance: %s$%.2f%s | Inventory Value: %s$%.2f%s | Total: %s$%.2f%s%s\n",
-           COLOR_CYAN, COLOR_GREEN, balance, COLOR_RESET,
+    printf("Balance: %s$%.2f%s | Inventory Value: %s$%.2f%s | Total: %s$%.2f%s\n",
+           COLOR_GREEN, balance, COLOR_RESET,
            COLOR_YELLOW, inv_value, COLOR_RESET,
-           COLOR_BRIGHT_GREEN, total, COLOR_RESET, COLOR_RESET);
+           COLOR_BRIGHT_GREEN, total, COLOR_RESET);
     fflush(stdout);
 }
 
@@ -268,12 +268,15 @@ void show_main_menu()
     print_menu_item("3. Trading", 0, 2, 7);
     print_menu_item("4. Unbox Cases", 0, 2, 8);
     print_menu_item("5. Profile", 0, 2, 9);
-    print_menu_item("6. Logout", 0, 2, 10);
-    print_menu_item("7. Exit", 0, 2, 11);
+    print_menu_item("6. Quests & Achievements", 0, 2, 10);
+    print_menu_item("7. Daily Rewards", 0, 2, 11);
+    print_menu_item("8. Chat", 0, 2, 12);
+    print_menu_item("9. Logout", 0, 2, 13);
+    print_menu_item("10. Exit", 0, 2, 14);
 
     printf("\n");
     print_separator(50);
-    printf("Select option (1-7): ");
+    printf("Select option (1-10): ");
     fflush(stdout);
 }
 
@@ -383,6 +386,8 @@ void show_inventory()
                         continue;
                     }
 
+                    // Show listing fee info
+                    printf("Listing fee: %s$0.50%s (refunded if sold)\n", COLOR_YELLOW, COLOR_RESET);
                     printf("Enter price for %s: $", selected_skin->name);
                     fflush(stdout);
                     char price_str[32];
@@ -410,6 +415,7 @@ void show_inventory()
                         if (response.header.msg_type == MSG_SELL_TO_MARKET)
                         {
                             print_success("Item listed on market successfully!");
+                            printf("Listing fee: %s$0.50%s deducted (will be refunded if sold)\n", COLOR_YELLOW, COLOR_RESET);
                         }
                         else if (response.header.msg_type == MSG_ERROR)
                         {
@@ -417,6 +423,8 @@ void show_inventory()
                             memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
                             if (error_code == ERR_PERMISSION_DENIED)
                                 print_error("You don't own this item");
+                            else if (error_code == ERR_INSUFFICIENT_FUNDS)
+                                print_error("Insufficient funds for listing fee ($0.50)");
                             else if (error_code == ERR_INVALID_REQUEST)
                                 print_error("Invalid request");
                             else
@@ -539,27 +547,28 @@ void show_market()
                     const char *rarity_color = get_rarity_color(skins[i].rarity);
                     const char *stattrak = skins[i].is_stattrak ? "StatTrak™ " : "";
                     const char *wear = wear_to_string(skins[i].wear);
-                    const char *owner_note = (listings[i].seller_id == g_user_id) ? " [Your Listing]" : "";
+                    const char *owner_note = (listings[i].seller_id == g_user_id) ? COLOR_YELLOW " [Your Listing]" COLOR_RESET : "";
 
-                    printf("%d. %s[%s]%s %s%s%s%s (%s, Pattern #%d)\n",
-                           i + 1,
-                           rarity_color, rarity_to_string(skins[i].rarity), COLOR_RESET,
-                           skins[i].is_stattrak ? COLOR_BRIGHT_GREEN : "", stattrak, COLOR_RESET,
-                           skins[i].name, wear, skins[i].pattern_seed);
-                    printf("   Price: %s$%.2f%s%s\n",
+                    printf("%s[%2d]%s ", COLOR_CYAN, i + 1, COLOR_RESET);
+                    printf("%s[%s]%s ", rarity_color, rarity_to_string(skins[i].rarity), COLOR_RESET);
+                    if (skins[i].is_stattrak)
+                        printf("%sStatTrak™ %s", COLOR_BRIGHT_GREEN, COLOR_RESET);
+                    printf("%s", skins[i].name);
+                    printf(" %s(%s, Pattern #%d)%s", COLOR_DIM, wear, skins[i].pattern_seed, COLOR_RESET);
+                    printf(" - %s$%.2f%s%s\n",
                            COLOR_BRIGHT_GREEN, listings[i].price, COLOR_RESET, owner_note);
-                    printf("   Listing ID: %d\n\n", listings[i].listing_id);
                 }
 
                 printf("\n");
                 print_separator(50);
                 printf("Options:\n");
-                printf("  Enter listing number to buy\n");
-                printf("  R<number> to remove your listing (e.g., R1)\n");
-                printf("  S. Search by name\n");
-                printf("  C. Clear search\n");
-                printf("  0. Back to main menu\n");
-                printf("Select option: ");
+                printf("  %s<number>%s - Buy item (e.g., 1, 2, 3)\n", COLOR_BRIGHT_GREEN, COLOR_RESET);
+                printf("  %sV<number>%s - View item details (e.g., V1, V2)\n", COLOR_CYAN, COLOR_RESET);
+                printf("  %sR<number>%s - Remove your listing (e.g., R1)\n", COLOR_YELLOW, COLOR_RESET);
+                printf("  %sS%s - Search by name\n", COLOR_CYAN, COLOR_RESET);
+                printf("  %sC%s - Clear search\n", COLOR_CYAN, COLOR_RESET);
+                printf("  %s0%s - Back to main menu\n", COLOR_DIM, COLOR_RESET);
+                printf("\nSelect option: ");
                 fflush(stdout);
 
                 char choice[32];
@@ -578,6 +587,67 @@ void show_market()
                 {
                     should_exit = 1;
                     break;
+                }
+                else if (choice[0] == 'S' || choice[0] == 's')
+                {
+                    // Search by name
+                    printf("\nEnter search term: ");
+                    fflush(stdout);
+                    char search_term[256];
+                    if (fgets(search_term, sizeof(search_term), stdin) != NULL)
+                    {
+                        // Remove newline
+                        size_t len = strlen(search_term);
+                        if (len > 0 && search_term[len - 1] == '\n')
+                            search_term[len - 1] = '\0';
+
+                        if (strlen(search_term) > 0)
+                        {
+                            strncpy(search_filter, search_term, sizeof(search_filter) - 1);
+                            search_filter[sizeof(search_filter) - 1] = '\0';
+                        }
+                    }
+                    // Loop will continue and show filtered results
+                }
+                else if (choice[0] == 'C' || choice[0] == 'c')
+                {
+                    // Clear search
+                    search_filter[0] = '\0';
+                    // Loop will continue and show all listings
+                }
+                else if (choice[0] == 'V' || choice[0] == 'v')
+                {
+                    // View item details
+                    int listing_num = atoi(choice + 1);
+                    if (listing_num > 0 && listing_num <= valid_count)
+                    {
+                        int listing_idx = listing_num - 1;
+                        clear_screen();
+                        print_header("ITEM DETAILS");
+                        printf("\n");
+                        // Display skin details
+                        const char *rarity_color = get_rarity_color(skins[listing_idx].rarity);
+                        const char *stattrak = skins[listing_idx].is_stattrak ? "StatTrak™ " : "";
+                        const char *wear = wear_to_string(skins[listing_idx].wear);
+                        printf("Item: %s[%s]%s ", rarity_color, rarity_to_string(skins[listing_idx].rarity), COLOR_RESET);
+                        if (skins[listing_idx].is_stattrak)
+                            printf("%sStatTrak™ %s", COLOR_BRIGHT_GREEN, COLOR_RESET);
+                        printf("%s\n", skins[listing_idx].name);
+                        printf("Wear: %s\n", wear);
+                        printf("Pattern: #%d\n", skins[listing_idx].pattern_seed);
+                        printf("Price: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, listings[listing_idx].price, COLOR_RESET);
+                        if (listings[listing_idx].seller_id == g_user_id)
+                        {
+                            printf("Status: %sYour Listing%s\n", COLOR_YELLOW, COLOR_RESET);
+                        }
+                        printf("\nPress Enter to continue...");
+                        getchar();
+                    }
+                    else
+                    {
+                        print_error("Invalid listing number");
+                        sleep(1);
+                    }
                 }
                 else if (choice[0] == 'R' || choice[0] == 'r')
                 {
@@ -601,6 +671,7 @@ void show_market()
                                 if (response.header.msg_type == MSG_REMOVE_FROM_MARKET)
                                 {
                                     print_success("Listing removed successfully!");
+                                    printf("Listing fee: %s$0.50%s refunded\n", COLOR_BRIGHT_GREEN, COLOR_RESET);
                                 }
                                 else if (response.header.msg_type == MSG_ERROR)
                                 {
@@ -648,13 +719,23 @@ void show_market()
                             continue;
                         }
 
-                        // Confirm purchase
-                        printf("\nPurchase %s%s%s%s for %s$%.2f%s? (y/n): ",
-                               skins[listing_idx].is_stattrak ? COLOR_BRIGHT_GREEN : "",
-                               skins[listing_idx].is_stattrak ? "StatTrak™ " : "",
-                               COLOR_RESET,
-                               skins[listing_idx].name,
-                               COLOR_BRIGHT_GREEN, listings[listing_idx].price, COLOR_RESET);
+                        // Show item summary before purchase
+                        clear_screen();
+                        print_header("CONFIRM PURCHASE");
+                        printf("\n");
+                        const char *rarity_color = get_rarity_color(skins[listing_idx].rarity);
+                        printf("Item: %s[%s]%s ", rarity_color, rarity_to_string(skins[listing_idx].rarity), COLOR_RESET);
+                        if (skins[listing_idx].is_stattrak)
+                            printf("%sStatTrak™ %s", COLOR_BRIGHT_GREEN, COLOR_RESET);
+                        printf("%s\n", skins[listing_idx].name);
+                        printf("Wear: %s\n", wear_to_string(skins[listing_idx].wear));
+                        printf("Pattern: #%d\n", skins[listing_idx].pattern_seed);
+                        printf("Price: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, listings[listing_idx].price, COLOR_RESET);
+                        printf("\n");
+                        display_balance_info();
+                        printf("\n");
+                        print_separator(50);
+                        printf("Purchase this item? (y/n): ");
                         fflush(stdout);
 
                         char confirm[32];
@@ -676,14 +757,33 @@ void show_market()
                         {
                             if (response.header.msg_type == MSG_BUY_FROM_MARKET)
                             {
+                                clear_screen();
+                                print_header("PURCHASE SUCCESS");
                                 print_success("Item purchased successfully!");
-                                printf("Added to your inventory.\n");
+                                printf("\n");
+                                // Display purchased item details
+                                const char *rarity_color = get_rarity_color(skins[listing_idx].rarity);
+                                const char *stattrak = skins[listing_idx].is_stattrak ? "StatTrak™ " : "";
+                                const char *wear = wear_to_string(skins[listing_idx].wear);
+                                printf("Item: %s[%s]%s ", rarity_color, rarity_to_string(skins[listing_idx].rarity), COLOR_RESET);
+                                if (skins[listing_idx].is_stattrak)
+                                    printf("%sStatTrak™ %s", COLOR_BRIGHT_GREEN, COLOR_RESET);
+                                printf("%s\n", skins[listing_idx].name);
+                                printf("Wear: %s\n", wear);
+                                printf("Pattern: #%d\n", skins[listing_idx].pattern_seed);
+                                printf("Price: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, listings[listing_idx].price, COLOR_RESET);
+                                printf("\n%sAdded to your inventory!%s\n", COLOR_BRIGHT_GREEN, COLOR_RESET);
+                                printf("\nPress Enter to continue...");
+                                getchar();
+                                // Loop will continue and refresh the market list
                             }
                             else if (response.header.msg_type == MSG_ERROR)
                             {
                                 uint32_t error_code;
                                 memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
 
+                                clear_screen();
+                                print_header("PURCHASE FAILED");
                                 if (error_code == ERR_INSUFFICIENT_FUNDS)
                                     print_error("Insufficient funds");
                                 else if (error_code == ERR_ITEM_NOT_FOUND)
@@ -692,14 +792,15 @@ void show_market()
                                     print_error("Cannot buy your own listing");
                                 else
                                     print_error("Failed to purchase item");
+                                printf("\nPress Enter to continue...");
+                                getchar();
                             }
                         }
                         else
                         {
                             print_error("Failed to communicate with server");
+                            sleep(2);
                         }
-
-                        sleep(2);
                     }
                     else
                     {
@@ -720,150 +821,167 @@ void show_market()
 
 void show_unbox()
 {
-    clear_screen();
-    print_header("UNBOX CASES");
-    display_balance_info();
+    int should_exit = 0;
 
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    // Get available cases
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_GET_CASES;
-    request.header.msg_length = 0;
-
-    if (send_message_to_server(&request) != 0)
+    while (!should_exit)
     {
-        print_error("Failed to request cases");
-        wait_for_key();
-        return;
-    }
+        clear_screen();
+        print_header("UNBOX CASES");
+        display_balance_info();
 
-    if (receive_message_from_server(&response) != 0)
-    {
-        print_error("Failed to receive cases");
-        wait_for_key();
-        return;
-    }
+        Message request, response;
+        memset(&request, 0, sizeof(Message));
+        memset(&response, 0, sizeof(Message));
 
-    if (response.header.msg_type == MSG_CASES_DATA)
-    {
-        Case cases[50];
-        int count = response.header.msg_length / sizeof(Case);
-        if (count > 50)
-            count = 50;
+        // Get available cases
+        request.header.magic = 0xABCD;
+        request.header.msg_type = MSG_GET_CASES;
+        request.header.msg_length = 0;
 
-        memcpy(cases, response.payload, count * sizeof(Case));
-
-        printf("\nAvailable Cases:\n\n");
-        for (int i = 0; i < count; i++)
+        if (send_message_to_server(&request) != 0)
         {
-            printf("%d. %s - $%.2f\n", i + 1, cases[i].name, cases[i].price);
+            print_error("Failed to request cases");
+            wait_for_key();
+            return;
         }
 
-        printf("\nSelect case to unbox (1-%d, 0 to cancel): ", count);
-        fflush(stdout);
-
-        char input[32];
-        if (fgets(input, sizeof(input), stdin) != NULL)
+        if (receive_message_from_server(&response) != 0)
         {
-            int choice = atoi(input);
-            if (choice > 0 && choice <= count)
+            print_error("Failed to receive cases");
+            wait_for_key();
+            return;
+        }
+
+        if (response.header.msg_type == MSG_CASES_DATA)
+        {
+            Case cases[50];
+            int count = response.header.msg_length / sizeof(Case);
+            if (count > 50)
+                count = 50;
+
+            memcpy(cases, response.payload, count * sizeof(Case));
+
+            printf("\nAvailable Cases:\n\n");
+            for (int i = 0; i < count; i++)
             {
-                // Unbox case
-                request.header.magic = 0xABCD;
-                request.header.msg_type = MSG_UNBOX_CASE;
-                snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, cases[choice - 1].case_id);
-                request.header.msg_length = strlen(request.payload);
+                printf("%d. %s - $%.2f\n", i + 1, cases[i].name, cases[i].price);
+            }
 
-                if (send_message_to_server(&request) == 0)
+            printf("\nSelect case to unbox (1-%d, 0 to cancel): ", count);
+            fflush(stdout);
+
+            char input[32];
+            if (fgets(input, sizeof(input), stdin) != NULL)
+            {
+                int choice = atoi(input);
+                if (choice == 0)
                 {
-                    if (receive_message_from_server(&response) == 0)
+                    should_exit = 1;
+                    break;
+                }
+                else if (choice > 0 && choice <= count)
+                {
+                    // Unbox case
+                    request.header.magic = 0xABCD;
+                    request.header.msg_type = MSG_UNBOX_CASE;
+                    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, cases[choice - 1].case_id);
+                    request.header.msg_length = strlen(request.payload);
+
+                    if (send_message_to_server(&request) == 0)
                     {
-                        if (response.header.msg_type == MSG_UNBOX_RESULT)
+                        if (receive_message_from_server(&response) == 0)
                         {
-                            if (response.header.msg_length >= sizeof(Skin))
+                            if (response.header.msg_type == MSG_UNBOX_RESULT)
                             {
-                                Skin unboxed;
-                                memcpy(&unboxed, response.payload, sizeof(Skin));
-
-                                // Simple animation: show opening effect
-                                clear_screen();
-                                printf("\n\n");
-                                for (int i = 0; i < 3; i++)
+                                if (response.header.msg_length >= sizeof(Skin))
                                 {
-                                    printf("  Opening case");
-                                    for (int j = 0; j < 3; j++)
+                                    Skin unboxed;
+                                    memcpy(&unboxed, response.payload, sizeof(Skin));
+
+                                    // Simple animation: show opening effect
+                                    clear_screen();
+                                    printf("\n\n");
+                                    for (int i = 0; i < 3; i++)
                                     {
-                                        printf(".");
+                                        printf("  Opening case");
+                                        for (int j = 0; j < 3; j++)
+                                        {
+                                            printf(".");
+                                            fflush(stdout);
+                                            usleep(200000); // 200ms
+                                        }
+                                        printf("\r");
+                                        printf("                \r"); // Clear line
                                         fflush(stdout);
-                                        usleep(200000); // 200ms
+                                        usleep(200000);
                                     }
-                                    printf("\r");
-                                    printf("                \r"); // Clear line
-                                    fflush(stdout);
-                                    usleep(200000);
+
+                                    // Display unboxed skin
+                                    clear_screen();
+                                    printf("\n\n");
+                                    print_box(20, 3, 60, 12, "UNBOXED!");
+                                    move_cursor(5, 22);
+                                    print_skin(&unboxed, 22, 5);
+                                    move_cursor(11, 22);
+                                    print_success("Case opened successfully!");
+                                    printf("\n\n");
+                                    wait_for_key();
+                                    // Loop will continue, showing case selection again
                                 }
+                                else
+                                {
+                                    print_error("Invalid response size from server");
+                                    wait_for_key();
+                                }
+                            }
+                            else if (response.header.msg_type == MSG_ERROR)
+                            {
+                                uint32_t error_code;
+                                memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
 
-                                // Display unboxed skin
-                                clear_screen();
-                                printf("\n\n");
-                                print_box(20, 3, 60, 12, "UNBOXED!");
-                                move_cursor(5, 22);
-                                print_skin(&unboxed, 22, 5);
-                                move_cursor(11, 22);
-                                print_success("Case opened successfully!");
-                                printf("\n\n");
+                                if (error_code == ERR_INSUFFICIENT_FUNDS)
+                                    print_error("Insufficient funds to open case");
+                                else if (error_code == ERR_INVALID_REQUEST)
+                                    print_error("Invalid case selection");
+                                else if (error_code == ERR_ITEM_NOT_FOUND)
+                                    print_error("Case or user not found");
+                                else if (error_code == ERR_DATABASE_ERROR)
+                                    print_error("Database error: Unable to process unbox request");
+                                else
+                                {
+                                    char err_msg[128];
+                                    snprintf(err_msg, sizeof(err_msg), "Unbox failed: error code %u", error_code);
+                                    print_error(err_msg);
+                                }
+                                wait_for_key();
                             }
                             else
                             {
-                                print_error("Invalid response size from server");
-                            }
-                        }
-                        else if (response.header.msg_type == MSG_ERROR)
-                        {
-                            uint32_t error_code;
-                            memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
-
-                            if (error_code == ERR_INSUFFICIENT_FUNDS)
-                                print_error("Insufficient funds to open case");
-                            else if (error_code == ERR_INVALID_REQUEST)
-                                print_error("Invalid case selection");
-                            else if (error_code == ERR_ITEM_NOT_FOUND)
-                                print_error("Case or user not found");
-                            else if (error_code == ERR_DATABASE_ERROR)
-                                print_error("Database error: Unable to process unbox request");
-                            else
-                            {
-                                char err_msg[128];
-                                snprintf(err_msg, sizeof(err_msg), "Unbox failed: error code %u", error_code);
-                                print_error(err_msg);
+                                print_error("Failed to unbox case");
+                                wait_for_key();
                             }
                         }
                         else
                         {
-                            print_error("Failed to unbox case");
+                            print_error("Failed to receive unbox response");
+                            wait_for_key();
                         }
                     }
                     else
                     {
-                        print_error("Failed to receive unbox response");
+                        print_error("Failed to send unbox request");
+                        wait_for_key();
                     }
-                }
-                else
-                {
-                    print_error("Failed to send unbox request");
                 }
             }
         }
-    }
-    else
-    {
-        print_error("Failed to load cases");
-    }
-
-    wait_for_key();
+        else
+        {
+            print_error("Failed to load cases");
+            wait_for_key();
+            break;
+        }
+    } // End while loop
 }
 
 void show_profile()
@@ -1103,82 +1221,135 @@ static void send_trade_offer_ui(int to_user_id, const char *to_username)
     offer.offered_cash = 0.0f;
     offer.requested_cash = 0.0f;
 
-    // Step 1: Select items to offer
-    printf("\n=== Items You're Offering ===\n");
+    // Load opponent's inventory
+    memset(&request, 0, sizeof(Message));
+    memset(&response, 0, sizeof(Message));
+    request.header.magic = 0xABCD;
+    request.header.msg_type = MSG_GET_INVENTORY;
+    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", to_user_id);
+    request.header.msg_length = strlen(request.payload);
+
+    Inventory opp_inv;
+    Skin opp_skins[MAX_INVENTORY_SIZE];
+    int opp_instance_ids[MAX_INVENTORY_SIZE];
+    int opp_valid_count = 0;
+
+    if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+    {
+        if (response.header.msg_type == MSG_INVENTORY_DATA)
+        {
+            memcpy(&opp_inv, response.payload, sizeof(Inventory));
+            printf("Loading opponent's inventory...\n");
+            for (int i = 0; i < opp_inv.count && i < MAX_INVENTORY_SIZE; i++)
+            {
+                int instance_id = opp_inv.skin_ids[i];
+                if (load_skin_details(instance_id, &opp_skins[opp_valid_count]) == 0)
+                {
+                    opp_instance_ids[opp_valid_count] = instance_id;
+                    opp_valid_count++;
+                }
+            }
+        }
+    }
+
+    // Step 1: Select items to REQUEST from opponent
+    printf("\n=== Items You're REQUESTING (from %s) ===\n", to_username);
+    if (opp_valid_count > 0)
+    {
+        printf("Opponent's Inventory:\n");
+        for (int i = 0; i < opp_valid_count; i++)
+        {
+            const char *rarity_color = get_rarity_color(opp_skins[i].rarity);
+            const char *stattrak = opp_skins[i].is_stattrak ? "StatTrak™ " : "";
+            const char *wear = wear_to_string(opp_skins[i].wear);
+            // Note: Trade lock status shown for info, but items can still be traded between users
+            // Items are only locked when listed on market
+            const char *tradable = opp_skins[i].is_tradable ? "" : COLOR_DIM " [Listed on Market]" COLOR_RESET;
+
+            printf("%d. %s[%s]%s %s%s%s%s (%s, Pattern #%d) - $%.2f%s\n",
+                   i + 1,
+                   rarity_color, rarity_to_string(opp_skins[i].rarity), COLOR_RESET,
+                   opp_skins[i].is_stattrak ? COLOR_BRIGHT_GREEN : "", stattrak, COLOR_RESET,
+                   opp_skins[i].name, wear, opp_skins[i].pattern_seed, opp_skins[i].current_price,
+                   tradable);
+        }
+    }
+    else
+    {
+        printf("Opponent's inventory is empty.\n");
+    }
+
+    printf("\nEnter item numbers to REQUEST (comma-separated, e.g., 1,3,5 or 0 to skip): ");
+    fflush(stdout);
+
+    char request_items_input[256];
+    if (fgets(request_items_input, sizeof(request_items_input), stdin) == NULL)
+        return;
+
+    // Parse requested item numbers
+    char *token = strtok(request_items_input, ",\n ");
+    while (token != NULL && offer.requested_count < 10)
+    {
+        int item_num = atoi(token);
+        if (item_num > 0 && item_num <= opp_valid_count)
+        {
+            int idx = item_num - 1;
+            // Note: Trade lock check removed - items are only locked when listed on market
+            // Trading between users does not require items to be unlocked
+            offer.requested_skins[offer.requested_count++] = opp_instance_ids[idx];
+        }
+        token = strtok(NULL, ",\n ");
+    }
+
+    // Step 2: Select items to OFFER from your inventory
+    printf("\n=== Items You're OFFERING ===\n");
     printf("Your Inventory:\n");
     for (int i = 0; i < valid_count; i++)
     {
         const char *rarity_color = get_rarity_color(skins[i].rarity);
         const char *stattrak = skins[i].is_stattrak ? "StatTrak™ " : "";
         const char *wear = wear_to_string(skins[i].wear);
-        const char *tradable = skins[i].is_tradable ? "" : " [Trade Locked]";
+        // Note: Items are NOT trade locked when creating offer, only after trade completes
 
-        printf("%d. %s[%s]%s %s%s%s%s (%s, Pattern #%d) - $%.2f%s\n",
+        printf("%d. %s[%s]%s %s%s%s%s (%s, Pattern #%d) - $%.2f\n",
                i + 1,
                rarity_color, rarity_to_string(skins[i].rarity), COLOR_RESET,
                skins[i].is_stattrak ? COLOR_BRIGHT_GREEN : "", stattrak, COLOR_RESET,
-               skins[i].name, wear, skins[i].pattern_seed, skins[i].current_price,
-               tradable);
+               skins[i].name, wear, skins[i].pattern_seed, skins[i].current_price);
     }
 
-    printf("\nEnter item numbers to offer (comma-separated, e.g., 1,3,5 or 0 to skip): ");
+    printf("\nEnter item numbers to OFFER (comma-separated, e.g., 1,3,5 or 0 to skip): ");
     fflush(stdout);
 
-    char items_input[256];
-    if (fgets(items_input, sizeof(items_input), stdin) == NULL)
+    char offer_items_input[256];
+    if (fgets(offer_items_input, sizeof(offer_items_input), stdin) == NULL)
         return;
 
-    // Parse item numbers
-    char *token = strtok(items_input, ",\n ");
+    // Parse offered item numbers
+    token = strtok(offer_items_input, ",\n ");
     while (token != NULL && offer.offered_count < 10)
     {
         int item_num = atoi(token);
         if (item_num > 0 && item_num <= valid_count)
         {
             int idx = item_num - 1;
-            if (skins[idx].is_tradable)
-            {
-                offer.offered_skins[offer.offered_count++] = instance_ids[idx];
-            }
-            else
-            {
-                printf("Item %d is trade locked, skipping...\n", item_num);
-            }
+            offer.offered_skins[offer.offered_count++] = instance_ids[idx];
         }
         token = strtok(NULL, ",\n ");
     }
 
-    // Step 2: Enter cash to offer
-    printf("\nEnter cash amount to offer (0 to skip): $");
-    fflush(stdout);
-    char cash_input[32];
-    if (fgets(cash_input, sizeof(cash_input), stdin) != NULL)
+    // Validate: must offer something OR request something
+    if (offer.offered_count == 0 && offer.requested_count == 0)
     {
-        offer.offered_cash = atof(cash_input);
-        if (offer.offered_cash < 0)
-            offer.offered_cash = 0.0f;
-    }
-
-    // Step 3: Enter cash to request
-    printf("Enter cash amount to request (0 to skip): $");
-    fflush(stdout);
-    char request_cash_input[32];
-    if (fgets(request_cash_input, sizeof(request_cash_input), stdin) != NULL)
-    {
-        offer.requested_cash = atof(request_cash_input);
-        if (offer.requested_cash < 0)
-            offer.requested_cash = 0.0f;
-    }
-
-    // Validate: must offer something
-    if (offer.offered_count == 0 && offer.offered_cash == 0.0f)
-    {
-        print_error("You must offer at least one item or cash");
+        print_error("You must offer or request at least one item");
         wait_for_key();
         return;
     }
 
-    // Step 4: Send trade offer
+    // Debug: Print trade offer details
+    printf("\nTrade Offer Summary:\n");
+    printf("  Requesting %d item(s)\n", offer.requested_count);
+    printf("  Offering %d item(s)\n", offer.offered_count);
     printf("\nSending trade offer...\n");
 
     memset(&request, 0, sizeof(Message));
@@ -1203,15 +1374,21 @@ static void send_trade_offer_ui(int to_user_id, const char *to_username)
             memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
 
             if (error_code == ERR_INVALID_TRADE)
-                print_error("Invalid trade offer");
+                print_error("Invalid trade offer (must offer or request at least one item)");
             else if (error_code == ERR_TRADE_LOCKED)
                 print_error("One or more items are trade locked");
             else if (error_code == ERR_PERMISSION_DENIED)
                 print_error("You don't own one or more items");
             else if (error_code == ERR_INSUFFICIENT_FUNDS)
                 print_error("Insufficient funds");
+            else if (error_code == ERR_DATABASE_ERROR)
+                print_error("Database error");
             else
-                print_error("Failed to send trade offer");
+            {
+                char err_msg[128];
+                snprintf(err_msg, sizeof(err_msg), "Failed to send trade offer (error code: %u)", error_code);
+                print_error(err_msg);
+            }
         }
         else
         {
@@ -1475,6 +1652,359 @@ void show_trading()
     wait_for_key();
 }
 
+// Show quests and achievements
+void show_quests_achievements()
+{
+    clear_screen();
+    print_header("QUESTS & ACHIEVEMENTS");
+    display_balance_info();
+
+    printf("\n=== DAILY QUESTS ===\n\n");
+
+    Message request, response;
+    memset(&request, 0, sizeof(Message));
+    memset(&response, 0, sizeof(Message));
+
+    request.header.magic = 0xABCD;
+    request.header.msg_type = MSG_GET_QUESTS;
+    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
+    request.header.msg_length = strlen(request.payload);
+
+    if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+    {
+        if (response.header.msg_type == MSG_QUESTS_DATA && response.header.msg_length > 0)
+        {
+            int count = response.header.msg_length / sizeof(Quest);
+            Quest *quests = (Quest *)response.payload;
+
+            const char *quest_names[] = {
+                "First Steps (Complete 3 trades)",
+                "Market Explorer (Buy 5 items)",
+                "Lucky Gambler (Unbox 5 cases)",
+                "Profit Maker (Make $50 profit)",
+                "Social Trader (Trade with 10 users)"};
+
+            float quest_rewards[] = {15.0f, 10.0f, 25.0f, 30.0f, 50.0f};
+
+            for (int i = 0; i < count; i++)
+            {
+                printf("%d. %s\n", i + 1, quest_names[quests[i].quest_type]);
+                printf("   Progress: %d/%d\n", quests[i].progress, quests[i].target);
+                if (quests[i].is_completed)
+                {
+                    if (quests[i].is_claimed)
+                    {
+                        printf("   Status: %s✓ Claimed%s\n", COLOR_GREEN, COLOR_RESET);
+                    }
+                    else
+                    {
+                        printf("   Status: %s✓ Completed - Reward: $%.2f%s\n", COLOR_YELLOW, quest_rewards[quests[i].quest_type], COLOR_RESET);
+                        printf("   Press %d to claim reward\n", i + 1);
+                    }
+                }
+                else
+                {
+                    printf("   Status: In Progress\n");
+                }
+                printf("\n");
+            }
+
+            printf("Enter quest number to claim reward, or 0 to go back: ");
+            fflush(stdout);
+            char choice[32];
+            if (fgets(choice, sizeof(choice), stdin) != NULL)
+            {
+                int quest_num = atoi(choice);
+                if (quest_num > 0 && quest_num <= count)
+                {
+                    int quest_id = quests[quest_num - 1].quest_id;
+                    if (quests[quest_num - 1].is_completed && !quests[quest_num - 1].is_claimed)
+                    {
+                        memset(&request, 0, sizeof(Message));
+                        memset(&response, 0, sizeof(Message));
+                        request.header.magic = 0xABCD;
+                        request.header.msg_type = MSG_CLAIM_QUEST_REWARD;
+                        snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, quest_id);
+                        request.header.msg_length = strlen(request.payload);
+
+                        if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+                        {
+                            if (response.header.msg_type == MSG_CLAIM_QUEST_REWARD)
+                            {
+                                print_success("Quest reward claimed!");
+                            }
+                            else
+                            {
+                                print_error("Failed to claim reward");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    printf("\n=== ACHIEVEMENTS ===\n\n");
+
+    memset(&request, 0, sizeof(Message));
+    memset(&response, 0, sizeof(Message));
+    request.header.magic = 0xABCD;
+    request.header.msg_type = MSG_GET_ACHIEVEMENTS;
+    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
+    request.header.msg_length = strlen(request.payload);
+
+    if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+    {
+        if (response.header.msg_type == MSG_ACHIEVEMENTS_DATA && response.header.msg_length > 0)
+        {
+            int count = response.header.msg_length / sizeof(Achievement);
+            Achievement *achievements = (Achievement *)response.payload;
+
+            const char *achievement_names[] = {
+                "First Trade Completed (+$20)",
+                "First Knife Unboxed (+$500)",
+                "Total Profit $1,000 (+$100)",
+                "100 Successful Trades (+$200)"};
+
+            float achievement_rewards[] = {20.0f, 500.0f, 100.0f, 200.0f};
+
+            for (int i = 0; i < count; i++)
+            {
+                if (achievements[i].is_unlocked)
+                {
+                    printf("%s✓%s %s\n", COLOR_GREEN, COLOR_RESET, achievement_names[achievements[i].achievement_type]);
+                    if (achievements[i].is_claimed)
+                    {
+                        printf("   Status: Claimed\n");
+                    }
+                    else
+                    {
+                        printf("   Status: %sUnlocked - Reward: $%.2f%s\n", COLOR_YELLOW, achievement_rewards[achievements[i].achievement_type], COLOR_RESET);
+                        printf("   Press %d to claim reward\n", i + 1);
+                    }
+                }
+                else
+                {
+                    printf("%s✗%s %s (Locked)\n", COLOR_RED, COLOR_RESET, achievement_names[achievements[i].achievement_type]);
+                }
+                printf("\n");
+            }
+
+            printf("Enter achievement number to claim reward, or 0 to go back: ");
+            fflush(stdout);
+            char choice[32];
+            if (fgets(choice, sizeof(choice), stdin) != NULL)
+            {
+                int ach_num = atoi(choice);
+                if (ach_num > 0 && ach_num <= count)
+                {
+                    int achievement_id = achievements[ach_num - 1].achievement_id;
+                    if (achievements[ach_num - 1].is_unlocked && !achievements[ach_num - 1].is_claimed)
+                    {
+                        memset(&request, 0, sizeof(Message));
+                        memset(&response, 0, sizeof(Message));
+                        request.header.magic = 0xABCD;
+                        request.header.msg_type = MSG_CLAIM_ACHIEVEMENT;
+                        snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, achievement_id);
+                        request.header.msg_length = strlen(request.payload);
+
+                        if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+                        {
+                            if (response.header.msg_type == MSG_CLAIM_ACHIEVEMENT)
+                            {
+                                print_success("Achievement reward claimed!");
+                            }
+                            else
+                            {
+                                print_error("Failed to claim reward");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    wait_for_key();
+}
+
+// Show daily rewards
+void show_daily_rewards()
+{
+    clear_screen();
+    print_header("DAILY LOGIN REWARDS");
+    display_balance_info();
+
+    printf("\n=== CLAIM DAILY REWARD ===\n\n");
+
+    Message request, response;
+    memset(&request, 0, sizeof(Message));
+    memset(&response, 0, sizeof(Message));
+
+    request.header.magic = 0xABCD;
+    request.header.msg_type = MSG_GET_LOGIN_REWARD;
+    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
+    request.header.msg_length = strlen(request.payload);
+
+    if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+    {
+        if (response.header.msg_type == MSG_LOGIN_REWARD_DATA)
+        {
+            float reward_amount = 0.0f;
+            int streak_day = 0;
+            if (sscanf((char *)response.payload, "%f:%d", &reward_amount, &streak_day) == 2)
+            {
+                printf("Day %d Reward: $%.2f\n", streak_day, reward_amount);
+                print_success("Daily reward claimed!");
+
+                if (streak_day == 7)
+                {
+                    printf("\n%s🎉 7-Day Streak Complete! Bonus reward!%s\n", COLOR_YELLOW, COLOR_RESET);
+                }
+            }
+        }
+        else if (response.header.msg_type == MSG_ERROR)
+        {
+            print_error("Already claimed today or error occurred");
+        }
+    }
+
+    printf("\nDaily Rewards:\n");
+    printf("Day 1: $5.00\n");
+    printf("Day 2: $8.00\n");
+    printf("Day 3: $12.00\n");
+    printf("Day 4: $15.00\n");
+    printf("Day 5: $20.00\n");
+    printf("Day 6: $25.00\n");
+    printf("Day 7: $50.00 + Bonus\n");
+    printf("\nNote: Streak resets if you miss a day\n");
+
+    wait_for_key();
+}
+
+// Show chat
+void show_chat()
+{
+    int should_exit = 0;
+    while (!should_exit)
+    {
+        clear_screen();
+        print_header("GLOBAL CHAT");
+        display_balance_info();
+
+        printf("\n=== CHAT HISTORY ===\n\n");
+
+        // Fetch recent messages from server
+        Message request, response;
+        memset(&request, 0, sizeof(Message));
+        memset(&response, 0, sizeof(Message));
+
+        request.header.magic = 0xABCD;
+        request.header.msg_type = MSG_GET_CHAT_HISTORY;
+        snprintf(request.payload, MAX_PAYLOAD_SIZE, "50"); // Get last 50 messages
+        request.header.msg_length = strlen(request.payload);
+
+        if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+        {
+            if (response.header.msg_type == MSG_CHAT_HISTORY_DATA && response.header.msg_length > 0)
+            {
+                int count = response.header.msg_length / sizeof(ChatMessage);
+                ChatMessage *messages = (ChatMessage *)response.payload;
+
+                // Display messages (oldest first)
+                for (int i = count - 1; i >= 0; i--)
+                {
+                    time_t msg_time = messages[i].timestamp;
+                    struct tm *time_info = localtime(&msg_time);
+                    char time_str[32];
+                    strftime(time_str, sizeof(time_str), "%H:%M:%S", time_info);
+
+                    if (messages[i].user_id == 0)
+                    {
+                        // System message (broadcast)
+                        printf("%s[%s] %s%s\n", COLOR_YELLOW, time_str, messages[i].message, COLOR_RESET);
+                    }
+                    else
+                    {
+                        printf("%s[%s] %s%s: %s%s\n",
+                               COLOR_CYAN, time_str,
+                               COLOR_BRIGHT_GREEN, messages[i].username,
+                               COLOR_RESET, messages[i].message);
+                    }
+                }
+            }
+            else
+            {
+                printf("No messages yet.\n");
+            }
+        }
+        else
+        {
+            printf("Failed to load chat history.\n");
+        }
+
+        printf("\n=== SEND MESSAGE ===\n");
+        printf("Type message (or 'exit' to go back): ");
+        fflush(stdout);
+
+        char message[256];
+        if (fgets(message, sizeof(message), stdin) != NULL)
+        {
+            // Remove newline
+            size_t len = strlen(message);
+            if (len > 0 && message[len - 1] == '\n')
+                message[len - 1] = '\0';
+
+            if (strcmp(message, "exit") == 0 || strcmp(message, "Exit") == 0)
+            {
+                should_exit = 1;
+                break;
+            }
+
+            if (strlen(message) > 0)
+            {
+                // Get username
+                User user;
+                memset(&request, 0, sizeof(Message));
+                memset(&response, 0, sizeof(Message));
+
+                request.header.magic = 0xABCD;
+                request.header.msg_type = MSG_GET_USER_PROFILE;
+                snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
+                request.header.msg_length = strlen(request.payload);
+
+                char username[MAX_USERNAME_LEN] = "User";
+                if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+                {
+                    if (response.header.msg_type == MSG_USER_PROFILE_DATA)
+                    {
+                        memcpy(&user, response.payload, sizeof(User));
+                        strncpy(username, user.username, MAX_USERNAME_LEN - 1);
+                    }
+                }
+
+                // Send chat message
+                memset(&request, 0, sizeof(Message));
+                memset(&response, 0, sizeof(Message));
+                request.header.magic = 0xABCD;
+                request.header.msg_type = MSG_CHAT_GLOBAL;
+                snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%s:%s", g_user_id, username, message);
+                request.header.msg_length = strlen(request.payload);
+
+                if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+                {
+                    if (response.header.msg_type != MSG_CHAT_GLOBAL)
+                    {
+                        print_error("Failed to send message");
+                        wait_for_key();
+                    }
+                    // Message sent successfully, loop will refresh and show it
+                }
+            }
+        }
+    }
+}
+
 // Authentication screen
 int authenticate()
 {
@@ -1625,6 +2155,15 @@ int main(int argc, char *argv[])
                 show_profile();
                 break;
             case 6:
+                show_quests_achievements();
+                break;
+            case 7:
+                show_daily_rewards();
+                break;
+            case 8:
+                show_chat();
+                break;
+            case 9:
             {
                 // Logout: send logout message and return to authenticate
                 Message request, response;
@@ -1646,7 +2185,7 @@ int main(int argc, char *argv[])
                 running = 0;
                 break;
             }
-            case 7:
+            case 10:
                 // Exit: set flag to exit completely
                 should_exit = 1;
                 running = 0;

@@ -20,5 +20,8 @@ int receive_message(int client_fd, Message *message);
 // Validate message header
 int validate_message_header(MessageHeader *header);
 
+// Broadcast message to all connected clients
+void broadcast_to_all_clients(const char *username, const char *message);
+
 #endif // REQUEST_HANDLER_H
 

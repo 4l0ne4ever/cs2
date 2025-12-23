@@ -85,4 +85,22 @@ int db_save_report(Report *report);
 int db_load_reports_for_user(int user_id, Report *out_reports, int *count);
 int db_get_report_count(int user_id);
 
+// Quest operations
+int db_save_quest(Quest *quest);
+int db_load_user_quests(int user_id, Quest *out_quests, int *count);
+int db_update_quest(Quest *quest);
+
+// Achievement operations
+int db_save_achievement(Achievement *achievement);
+int db_load_user_achievements(int user_id, Achievement *out_achievements, int *count);
+int db_update_achievement(Achievement *achievement);
+
+// Login streak operations
+int db_save_login_streak(LoginStreak *streak);
+int db_load_login_streak(int user_id, LoginStreak *out_streak);
+
+// Chat operations
+int db_save_chat_message(int user_id, const char *username, const char *message);
+int db_load_recent_chat_messages(ChatMessage *out_messages, int *count, int limit);
+
 #endif // DATABASE_H

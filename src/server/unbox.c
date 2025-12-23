@@ -4,6 +4,10 @@
 #include "../include/database.h"
 #include "../include/types.h"
 #include "../include/protocol.h"
+#include "../include/quests.h"
+#include "../include/achievements.h"
+#include "../include/chat.h"
+#include "../include/request_handler.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -311,6 +315,8 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
         return -7; // Failed to add to inventory
     }
 
+    // Note: Unboxed items are NOT trade locked - only items listed on market are locked
+
     // Step 9: Calculate price using definition's rarity
     // Calculate price: base_price * rarity_multiplier * wear_multiplier
     float current_price = db_calculate_skin_price(definition_id, final_rarity, wear);
@@ -344,7 +350,20 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     log.timestamp = time(NULL);
     db_log_transaction(&log);
 
-    // Step 11: Broadcast rare drops (Contraband/Covert items)
+    // Step 11: Update quests and achievements
+    // Lucky Gambler quest: Unbox 5 cases
+    update_quest_progress(user_id, QUEST_LUCKY_GAMBLER, 1);
+    
+    // First Knife achievement: Unbox Contraband (knife/glove)
+    if (final_rarity == RARITY_CONTRABAND)
+    {
+        unlock_achievement(user_id, ACHIEVEMENT_FIRST_KNIFE);
+    }
+    
+    // Check quest completion
+    check_quest_completion(user_id);
+
+    // Step 12: Broadcast rare drops (Contraband/Covert items)
     if (final_rarity == RARITY_CONTRABAND || final_rarity == RARITY_COVERT)
     {
         broadcast_rare_unbox(user_id, out_skin);
@@ -541,9 +560,21 @@ void broadcast_rare_unbox(int user_id, const Skin *unboxed_skin)
     log.timestamp = time(NULL);
     db_log_transaction(&log);
 
-    // In a real server implementation, you would:
-    // 1. Get all active sessions
-    // 2. Send MSG_UNBOX_RESULT broadcast to all clients
-    // 3. Include user_id and skin info in broadcast
-    // For now, this is logged and can be retrieved by clients via transaction log
+    // Broadcast to chat system and all connected clients
+    User user;
+    if (db_load_user(user_id, &user) == 0)
+    {
+        char broadcast_msg[256];
+        snprintf(broadcast_msg, sizeof(broadcast_msg),
+                 "🎉 RARE DROP: %s unboxed %s %s%s (Price: $%.2f)!",
+                 user.username, rarity_name, unboxed_skin->name,
+                 unboxed_skin->is_stattrak ? " [StatTrak™]" : "",
+                 unboxed_skin->current_price);
+        
+        // Save as system message (user_id 0 = system)
+        db_save_chat_message(0, "SYSTEM", broadcast_msg);
+        
+        // Broadcast to all connected clients
+        broadcast_to_all_clients("SYSTEM", broadcast_msg);
+    }
 }

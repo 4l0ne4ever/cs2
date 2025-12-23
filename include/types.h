@@ -9,6 +9,7 @@
 #define MAX_USERNAME_LEN 32
 #define MAX_PASSWORD_HASH_LEN 65
 #define MAX_ITEM_NAME_LEN 64
+#define MAX_CHAT_HISTORY 50
 
 // ==================== ENUMS ====================
 
@@ -165,5 +166,66 @@ typedef struct
     time_t created_at;    // When report was created
     int is_resolved;      // 0 = pending, 1 = resolved
 } Report;
+
+// Quest System
+typedef enum
+{
+    QUEST_FIRST_STEPS = 0,    // Complete 3 trades
+    QUEST_MARKET_EXPLORER,    // Buy 5 items from market
+    QUEST_LUCKY_GAMBLER,      // Unbox 5 cases
+    QUEST_PROFIT_MAKER,       // Make $50 profit
+    QUEST_SOCIAL_TRADER       // Trade with 10 different users
+} QuestType;
+
+typedef struct
+{
+    int quest_id;
+    int user_id;
+    QuestType quest_type;
+    int progress;          // Current progress
+    int target;             // Target value
+    int is_completed;       // 0 = in progress, 1 = completed
+    int is_claimed;         // 0 = not claimed, 1 = claimed
+    time_t started_at;      // When quest started
+    time_t completed_at;     // When quest completed
+} Quest;
+
+// Achievement System
+typedef enum
+{
+    ACHIEVEMENT_FIRST_TRADE = 0,      // First Trade Completed
+    ACHIEVEMENT_FIRST_KNIFE,          // First Knife Unboxed
+    ACHIEVEMENT_PROFIT_1000,          // Total Profit $1,000
+    ACHIEVEMENT_100_TRADES            // 100 Successful Trades
+} AchievementType;
+
+typedef struct
+{
+    int achievement_id;
+    int user_id;
+    AchievementType achievement_type;
+    int is_unlocked;        // 0 = locked, 1 = unlocked
+    int is_claimed;         // 0 = not claimed, 1 = claimed
+    time_t unlocked_at;     // When achievement was unlocked
+} Achievement;
+
+// Daily Login Rewards
+typedef struct
+{
+    int user_id;
+    int current_streak;      // Current login streak (1-7)
+    time_t last_login_date;  // Last login date (date only, no time)
+    time_t last_reward_date; // Last reward claimed date
+} LoginStreak;
+
+// Chat Message
+typedef struct
+{
+    int message_id;
+    int user_id;
+    char username[MAX_USERNAME_LEN];
+    char message[256];
+    time_t timestamp;
+} ChatMessage;
 
 #endif // TYPES_H

@@ -3,12 +3,14 @@
 #include "../include/market.h"
 #include "../include/database.h"
 #include "../include/types.h"
+#include "../include/quests.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #define MARKET_FEE_RATE 0.15f // 15% fee
+#define LISTING_FEE 0.50f     // $0.50 listing fee (refunded if sold)
 
 // List all active market listings
 int get_market_listings(MarketListing *out_listings, int *count)
@@ -52,10 +54,34 @@ int list_skin_on_market(int user_id, int instance_id, float price)
     // (In a full implementation, we'd check market_listings_v2 for active listings)
     // For now, we'll just create the listing
 
+    // Check user balance for listing fee
+    User user;
+    if (db_load_user(user_id, &user) != 0)
+        return -4; // User not found
+
+    if (user.balance < LISTING_FEE)
+        return -5; // Insufficient funds for listing fee
+
+    // Deduct listing fee
+    user.balance -= LISTING_FEE;
+    if (db_update_user(&user) != 0)
+        return -6; // Failed to update balance
+
+    // Apply trade lock when listing on market (1 day lock)
+    db_apply_trade_lock(instance_id);
+
+    // Remove from inventory (item is now on market)
+    db_remove_from_inventory(user_id, instance_id);
+
     // Create listing
     int listing_id;
     if (db_save_listing_v2(user_id, instance_id, price, &listing_id) != 0)
+    {
+        // Rollback: refund listing fee
+        user.balance += LISTING_FEE;
+        db_update_user(&user);
         return -3; // Failed to create listing
+    }
 
     return 0;
 }
@@ -95,6 +121,9 @@ int buy_from_market(int buyer_id, int listing_id)
     // Calculate fee and seller payout
     float fee = price * MARKET_FEE_RATE;
     float seller_payout = price - fee;
+    
+    // Refund listing fee to seller (if item was sold)
+    seller_payout += LISTING_FEE;
 
     // Update balances
     buyer.balance -= price;
@@ -136,6 +165,9 @@ int buy_from_market(int buyer_id, int listing_id)
         return -11; // Failed to add to inventory
     }
 
+    // Apply trade lock to purchased item (only when buying from market)
+    db_apply_trade_lock(instance_id);
+
     // Log transaction
     TransactionLog log;
     log.log_id = 0; // Auto-increment
@@ -149,9 +181,21 @@ int buy_from_market(int buyer_id, int listing_id)
     log2.log_id = 0;
     log2.type = LOG_MARKET_SELL;
     log2.user_id = seller_id;
-    snprintf(log2.details, sizeof(log2.details), "Sold instance %d for $%.2f (received $%.2f after fee)", instance_id, price, seller_payout);
+    snprintf(log2.details, sizeof(log2.details), "Sold instance %d for $%.2f (received $%.2f after fee, +$%.2f listing fee refund)", instance_id, price, seller_payout - LISTING_FEE, LISTING_FEE);
     log2.timestamp = time(NULL);
     db_log_transaction(&log2);
+
+    // Update quests
+    // Market Explorer quest: Buy 5 items from market
+    update_quest_progress(buyer_id, QUEST_MARKET_EXPLORER, 1);
+    
+    // Profit Maker quest: Track profit (seller received payout)
+    // Note: This is simplified - in full implementation, track actual profit from purchase price
+    update_quest_progress(seller_id, QUEST_PROFIT_MAKER, (int)seller_payout);
+    
+    // Check quest completion
+    check_quest_completion(buyer_id);
+    check_quest_completion(seller_id);
 
     return 0;
 }
@@ -171,6 +215,14 @@ int remove_listing(int listing_id)
 
     if (is_sold)
         return -2; // Already sold
+
+    // Refund listing fee when removing listing (if not sold)
+    User seller;
+    if (db_load_user(seller_id, &seller) == 0)
+    {
+        seller.balance += LISTING_FEE;
+        db_update_user(&seller);
+    }
 
     // Remove listing
     return db_remove_listing_v2(listing_id);

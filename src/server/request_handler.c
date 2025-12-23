@@ -7,6 +7,10 @@
 #include "../include/unbox.h"
 #include "../include/database.h"
 #include "../include/protocol.h"
+#include "../include/quests.h"
+#include "../include/achievements.h"
+#include "../include/login_rewards.h"
+#include "../include/chat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -324,7 +328,24 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
         }
         else
         {
-            create_error_response(response, MSG_BUY_FROM_MARKET, result);
+            // Map error codes
+            uint32_t error_code = ERR_INVALID_REQUEST;
+            if (result == -1)
+                error_code = ERR_ITEM_NOT_FOUND;
+            else if (result == -2)
+                error_code = ERR_ITEM_NOT_FOUND; // Already sold
+            else if (result == -3)
+                error_code = ERR_PERMISSION_DENIED; // Cannot buy own listing
+            else if (result == -4 || result == -6)
+                error_code = ERR_ITEM_NOT_FOUND; // User not found
+            else if (result == -5)
+                error_code = ERR_INSUFFICIENT_FUNDS;
+            else if (result == -6)
+                error_code = ERR_DATABASE_ERROR;
+            else
+                error_code = ERR_DATABASE_ERROR;
+            
+            create_error_response(response, MSG_BUY_FROM_MARKET, error_code);
         }
         break;
     }
@@ -347,7 +368,22 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
         }
         else
         {
-            create_error_response(response, MSG_SELL_TO_MARKET, result);
+            // Map error codes
+            uint32_t error_code = ERR_INVALID_REQUEST;
+            if (result == -1)
+                error_code = ERR_ITEM_NOT_FOUND;
+            else if (result == -2)
+                error_code = ERR_PERMISSION_DENIED;
+            else if (result == -3)
+                error_code = ERR_DATABASE_ERROR;
+            else if (result == -4)
+                error_code = ERR_ITEM_NOT_FOUND; // User not found
+            else if (result == -5)
+                error_code = ERR_INSUFFICIENT_FUNDS; // Insufficient funds for listing fee
+            else if (result == -6)
+                error_code = ERR_DATABASE_ERROR; // Failed to update balance
+            
+            create_error_response(response, MSG_SELL_TO_MARKET, error_code);
         }
         break;
     }
@@ -482,8 +518,10 @@ static int handle_trading_request(int client_fd, Message *request, Message *resp
                 error_code = ERR_TRADE_LOCKED;
             else if (result == -5 || result == -6)
                 error_code = ERR_PERMISSION_DENIED;
-            else if (result == -9 || result == -11)
+            else if (result == -8 || result == -9 || result == -10 || result == -11)
                 error_code = ERR_INSUFFICIENT_FUNDS;
+            else if (result == -12)
+                error_code = ERR_INVALID_TRADE; // Empty trade
             
             create_error_response(response, MSG_SEND_TRADE_OFFER, error_code);
         }
@@ -812,17 +850,194 @@ static int handle_inventory_request(int client_fd, Message *request, Message *re
     return send_response(client_fd, response);
 }
 
+// Handle quests and achievements messages
+static int handle_quests_request(int client_fd, Message *request, Message *response)
+{
+    switch (request->header.msg_type)
+    {
+    case MSG_GET_QUESTS:
+    {
+        uint32_t user_id;
+        if (sscanf((char *)request->payload, "%u", &user_id) != 1)
+        {
+            create_error_response(response, MSG_GET_QUESTS, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        Quest quests[10];
+        int count = 0;
+        if (get_user_quests((int)user_id, quests, &count) == 0)
+        {
+            create_success_response(response, MSG_QUESTS_DATA, quests, sizeof(Quest) * count);
+            response->header.msg_length = sizeof(Quest) * count;
+        }
+        else
+        {
+            create_success_response(response, MSG_QUESTS_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    case MSG_CLAIM_QUEST_REWARD:
+    {
+        uint32_t user_id, quest_id;
+        if (sscanf((char *)request->payload, "%u:%u", &user_id, &quest_id) != 2)
+        {
+            create_error_response(response, MSG_CLAIM_QUEST_REWARD, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        if (claim_quest_reward((int)user_id, (int)quest_id) == 0)
+        {
+            create_success_response(response, MSG_CLAIM_QUEST_REWARD, NULL, 0);
+        }
+        else
+        {
+            create_error_response(response, MSG_CLAIM_QUEST_REWARD, ERR_INVALID_REQUEST);
+        }
+        break;
+    }
+    
+    case MSG_GET_ACHIEVEMENTS:
+    {
+        uint32_t user_id;
+        if (sscanf((char *)request->payload, "%u", &user_id) != 1)
+        {
+            create_error_response(response, MSG_GET_ACHIEVEMENTS, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        Achievement achievements[10];
+        int count = 0;
+        if (get_user_achievements((int)user_id, achievements, &count) == 0)
+        {
+            create_success_response(response, MSG_ACHIEVEMENTS_DATA, achievements, sizeof(Achievement) * count);
+            response->header.msg_length = sizeof(Achievement) * count;
+        }
+        else
+        {
+            create_success_response(response, MSG_ACHIEVEMENTS_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    case MSG_CLAIM_ACHIEVEMENT:
+    {
+        uint32_t user_id, achievement_id;
+        if (sscanf((char *)request->payload, "%u:%u", &user_id, &achievement_id) != 2)
+        {
+            create_error_response(response, MSG_CLAIM_ACHIEVEMENT, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        if (claim_achievement_reward((int)user_id, (int)achievement_id) == 0)
+        {
+            create_success_response(response, MSG_CLAIM_ACHIEVEMENT, NULL, 0);
+        }
+        else
+        {
+            create_error_response(response, MSG_CLAIM_ACHIEVEMENT, ERR_INVALID_REQUEST);
+        }
+        break;
+    }
+    
+    case MSG_GET_LOGIN_REWARD:
+    {
+        uint32_t user_id;
+        if (sscanf((char *)request->payload, "%u", &user_id) != 1)
+        {
+            create_error_response(response, MSG_GET_LOGIN_REWARD, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        float reward_amount = 0.0f;
+        int streak_day = 0;
+        int result = claim_daily_reward((int)user_id, &reward_amount, &streak_day);
+        
+        if (result == 0)
+        {
+            char reward_data[64];
+            snprintf(reward_data, sizeof(reward_data), "%.2f:%d", reward_amount, streak_day);
+            create_success_response(response, MSG_LOGIN_REWARD_DATA, reward_data, strlen(reward_data));
+        }
+        else if (result == -2)
+        {
+            // Already claimed today
+            create_error_response(response, MSG_GET_LOGIN_REWARD, ERR_INVALID_REQUEST);
+        }
+        else
+        {
+            create_error_response(response, MSG_GET_LOGIN_REWARD, ERR_DATABASE_ERROR);
+        }
+        break;
+    }
+    
+    default:
+        create_error_response(response, request->header.msg_type, ERR_INVALID_REQUEST);
+        break;
+    }
+    
+    return send_response(client_fd, response);
+}
+
 // Handle chat messages
 static int handle_chat_request(int client_fd, Message *request, Message *response)
 {
-    if (request->header.msg_type == MSG_CHAT_GLOBAL)
+    switch (request->header.msg_type)
     {
-        // Echo chat message (in real implementation, would broadcast to all clients)
-        create_success_response(response, MSG_CHAT_GLOBAL, request->payload, request->header.msg_length);
+    case MSG_CHAT_GLOBAL:
+    {
+        // Parse: user_id:username:message
+        uint32_t user_id;
+        char username[MAX_USERNAME_LEN];
+        char message[256];
+        int parse_result = sscanf((char *)request->payload, "%u:%31[^:]:%255[^\n]", &user_id, username, message);
+        
+        if (parse_result != 3)
+        {
+            create_error_response(response, MSG_CHAT_GLOBAL, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        if (send_chat_message((int)user_id, username, message) == 0)
+        {
+            create_success_response(response, MSG_CHAT_GLOBAL, NULL, 0);
+        }
+        else
+        {
+            create_error_response(response, MSG_CHAT_GLOBAL, ERR_DATABASE_ERROR);
+        }
+        break;
     }
-    else
+    
+    case MSG_GET_CHAT_HISTORY:
     {
+        // Parse: limit (optional, default 50)
+        int limit = 50;
+        if (request->header.msg_length > 0)
+        {
+            limit = atoi((char *)request->payload);
+            if (limit <= 0 || limit > 100)
+                limit = 50;
+        }
+        
+        ChatMessage messages[100];
+        int count = 0;
+        if (get_recent_chat_messages(messages, &count, limit) == 0)
+        {
+            create_success_response(response, MSG_CHAT_HISTORY_DATA, messages, sizeof(ChatMessage) * count);
+            response->header.msg_length = sizeof(ChatMessage) * count;
+        }
+        else
+        {
+            create_error_response(response, MSG_GET_CHAT_HISTORY, ERR_DATABASE_ERROR);
+        }
+        break;
+    }
+    
+    default:
         create_error_response(response, request->header.msg_type, ERR_INVALID_REQUEST);
+        break;
     }
     
     return send_response(client_fd, response);
@@ -859,9 +1074,13 @@ int handle_client_request(int client_fd, Message *request)
     {
         handle_unbox_request(client_fd, request, &response);
     }
-    else if (msg_type == MSG_CHAT_GLOBAL)
+    else if (msg_type >= MSG_CHAT_GLOBAL && msg_type <= MSG_CHAT_HISTORY_DATA)
     {
         handle_chat_request(client_fd, request, &response);
+    }
+    else if (msg_type >= MSG_GET_QUESTS && msg_type <= MSG_LOGIN_REWARD_DATA)
+    {
+        handle_quests_request(client_fd, request, &response);
     }
     else if (msg_type == MSG_HEARTBEAT)
     {

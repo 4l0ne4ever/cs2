@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
-    
+
     printf("=== CS2 Skin Trading - Add Demo Data ===\n\n");
 
     // Open existing database
@@ -27,8 +27,9 @@ int main(int argc, char *argv[])
 
     // Create demo users
     printf("Creating demo users...\n");
-    
-    struct {
+
+    struct
+    {
         const char *username;
         const char *password;
         float balance;
@@ -40,12 +41,11 @@ int main(int argc, char *argv[])
         {"trader2", "123456", 1500.0f},
         {"richguy", "123456", 5000.0f},
         {"newbie", "123456", 100.0f},
-        {"pro", "123456", 3000.0f}
-    };
-    
+        {"pro", "123456", 3000.0f}};
+
     int user_ids[8] = {0};
     int user_count = sizeof(demo_users) / sizeof(demo_users[0]);
-    
+
     for (int i = 0; i < user_count; i++)
     {
         User user = {0};
@@ -55,11 +55,11 @@ int main(int argc, char *argv[])
         user.balance = demo_users[i].balance;
         user.created_at = time(NULL) - (3600 * 24 * (i + 1)); // Different creation times
         user.is_banned = 0;
-        
+
         if (db_save_user(&user) == 0)
         {
             user_ids[i] = user.user_id;
-            printf("  ✓ Created user: %s (ID: %d, Balance: $%.2f)\n", 
+            printf("  ✓ Created user: %s (ID: %d, Balance: $%.2f)\n",
                    user.username, user.user_id, user.balance);
         }
         else
@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
                 // Update balance
                 user.balance = demo_users[i].balance;
                 db_update_user(&user);
-                printf("  ✓ Updated user: %s (ID: %d, Balance: $%.2f)\n", 
+                printf("  ✓ Updated user: %s (ID: %d, Balance: $%.2f)\n",
                        user.username, user.user_id, user.balance);
             }
             else
@@ -80,12 +80,12 @@ int main(int argc, char *argv[])
             }
         }
     }
-    
+
     printf("\n✓ Created/Updated %d users\n\n", user_count);
-    
+
     // Create skin instances for users and add to inventory
     printf("Creating skin instances...\n");
-    
+
     // Get some skin definitions from database
     sqlite3 *db;
     if (sqlite3_open("data/database.db", &db) != SQLITE_OK)
@@ -94,7 +94,7 @@ int main(int argc, char *argv[])
         db_close();
         return 1;
     }
-    
+
     // Get skin definitions (get more for variety)
     int definition_ids[100];
     int def_count = 0;
@@ -108,44 +108,55 @@ int main(int argc, char *argv[])
         }
     }
     sqlite3_finalize(stmt);
-    
+
     printf("  Found %d skin definitions\n", def_count);
-    
+
     // Create skin instances for each user
     int instance_count = 0;
-    int instance_ids[500]; // Store instance IDs for market listings (increased for more listings)
+    int instance_ids[500];    // Store instance IDs for market listings (increased for more listings)
     int instance_owners[500]; // Store owner IDs
-    
+
     srand(time(NULL));
-    
+
     for (int u = 0; u < user_count && u < 8; u++)
     {
         int user_id = user_ids[u];
-        if (user_id == 0) continue;
-        
+        if (user_id == 0)
+            continue;
+
         // Each user gets 15-25 random skins (increased for better demo)
         int skins_per_user = 15 + (rand() % 11);
-        
+
         for (int s = 0; s < skins_per_user && def_count > 0; s++)
         {
             int def_idx = rand() % def_count;
             int definition_id = definition_ids[def_idx];
-            
-            // Random rarity (mostly Covert, some Contraband)
-            SkinRarity rarity = (rand() % 10 < 1) ? RARITY_CONTRABAND : RARITY_COVERT;
-            
+
+            // Load skin definition from database to get actual rarity
+            char skin_name[MAX_ITEM_NAME_LEN];
+            float base_price;
+            SkinRarity rarity;
+            if (db_load_skin_definition_with_rarity(definition_id, skin_name, &base_price, &rarity) != 0)
+            {
+                // Skip if definition not found
+                continue;
+            }
+
             // Random wear (0.0 - 0.45 for better prices)
+            // Wear is instance-specific, so random is fine
             WearCondition wear = ((float)rand() / (float)RAND_MAX) * 0.45f;
-            
-            // Random pattern seed
+
+            // Random pattern seed (instance-specific)
             int pattern_seed = rand() % 1001;
-            
-            // 10% chance for StatTrak
+
+            // 10% chance for StatTrak (instance-specific)
             int is_stattrak = (rand() % 10 == 0) ? 1 : 0;
-            
+
             int instance_id = 0;
             if (db_create_skin_instance(definition_id, rarity, wear, pattern_seed, is_stattrak, user_id, &instance_id) == 0)
             {
+                // Note: Items in inventory are NOT trade locked - only items listed on market are locked
+
                 // Add to inventory
                 if (db_add_to_inventory(user_id, instance_id) == 0)
                 {
@@ -155,18 +166,18 @@ int main(int argc, char *argv[])
                 }
             }
         }
-        
+
         printf("  ✓ User %s: Added %d skins to inventory\n", demo_users[u].username, skins_per_user);
     }
-    
+
     printf("\n✓ Created %d skin instances\n\n", instance_count);
-    
+
     // List items on market (aim for 50+ listings)
     printf("Creating market listings...\n");
-    
+
     int listings_created = 0;
     int target_listings = 60; // Target 60+ listings
-    
+
     // List items from all users, prioritizing to reach target
     for (int i = 0; i < instance_count && listings_created < target_listings; i++)
     {
@@ -175,7 +186,7 @@ int main(int argc, char *argv[])
         {
             int instance_id = instance_ids[i];
             int owner_id = instance_owners[i];
-            
+
             // Get skin details to calculate price
             int definition_id;
             SkinRarity rarity;
@@ -183,42 +194,32 @@ int main(int argc, char *argv[])
             int pattern_seed, is_stattrak;
             time_t acquired_at;
             int is_tradable;
-            
+
             int temp_owner_id;
             if (db_load_skin_instance(instance_id, &definition_id, &rarity, &wear, &pattern_seed, &is_stattrak, &temp_owner_id, &acquired_at, &is_tradable) == 0)
             {
-                // Calculate price
-                float price = db_calculate_skin_price(definition_id, rarity, wear);
-                
-                // Add 10-30% markup for market
-                float market_price = price * (1.1f + ((float)rand() / (float)RAND_MAX) * 0.2f);
-                
-                // Make item tradable (unlock it) before listing
-                // Update instance to be tradable
-                const char *update_sql = "UPDATE skin_instances SET is_tradable = 1 WHERE instance_id = ?";
-                sqlite3_stmt *update_stmt;
-                if (sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, 0) == SQLITE_OK)
-                {
-                    sqlite3_bind_int(update_stmt, 1, instance_id);
-                    sqlite3_step(update_stmt);
-                    sqlite3_finalize(update_stmt);
-                }
-                
-                // Create listing
+                // Calculate price from database (ensures sync with UI)
+                // Use the actual calculated price, not with markup, to ensure sync
+                float market_price = db_calculate_skin_price(definition_id, rarity, wear);
+
+                // Apply trade lock when listing on market (1 day lock)
+                db_apply_trade_lock(instance_id);
+
+                // Remove from inventory (item is now on market)
+                db_remove_from_inventory(owner_id, instance_id);
+
+                // Create listing with the actual calculated price
                 int listing_id = 0;
                 if (db_save_listing_v2(owner_id, instance_id, market_price, &listing_id) == 0)
                 {
                     listings_created++;
-                    
-                    // Remove from inventory (item is now on market)
-                    db_remove_from_inventory(owner_id, instance_id);
                 }
             }
         }
     }
-    
+
     printf("  ✓ Created %d market listings\n\n", listings_created);
-    
+
     // Summary
     printf("=== Demo Data Summary ===\n");
     printf("Users created/updated: %d\n", user_count);
@@ -228,13 +229,12 @@ int main(int argc, char *argv[])
     printf("\nYou can now login with any of these accounts:\n");
     for (int i = 0; i < user_count; i++)
     {
-        printf("  Username: %s, Password: %s, Balance: $%.2f\n", 
+        printf("  Username: %s, Password: %s, Balance: $%.2f\n",
                demo_users[i].username, demo_users[i].password, demo_users[i].balance);
     }
-    
+
     sqlite3_close(db);
     db_close();
-    
+
     return 0;
 }
-

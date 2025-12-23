@@ -5,6 +5,9 @@
 #include "../include/database.h"
 #include "../include/thread_pool.h"
 #include "../include/request_handler.h"
+
+// Forward declaration for calculate_checksum (from protocol.c)
+extern uint32_t calculate_checksum(const char *data, int length);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +20,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <time.h>
+#include <pthread.h>
 
 
 #define MAX_CLIENTS 1000
@@ -24,6 +28,11 @@
 
 static int server_running = 1;
 static ThreadPool g_thread_pool;
+
+// Global client tracking for broadcasting
+static int g_client_fds[MAX_CLIENTS];
+static int g_client_count = 0;
+static pthread_mutex_t g_client_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Signal handler for graceful shutdown
 void signal_handler(int sig)
@@ -165,8 +174,6 @@ int main(int argc, char *argv[])
     
     // Main server loop
     fd_set read_fds;
-    int client_fds[MAX_CLIENTS];
-    int client_count = 0;
     int max_fd = server_fd;
     
     while (server_running)
@@ -175,15 +182,17 @@ int main(int argc, char *argv[])
         FD_SET(server_fd, &read_fds);
         
         // Add all client sockets to select set
-        for (int i = 0; i < client_count; i++)
+        pthread_mutex_lock(&g_client_mutex);
+        for (int i = 0; i < g_client_count; i++)
         {
-            if (client_fds[i] >= 0)
+            if (g_client_fds[i] >= 0)
             {
-                FD_SET(client_fds[i], &read_fds);
-                if (client_fds[i] > max_fd)
-                    max_fd = client_fds[i];
+                FD_SET(g_client_fds[i], &read_fds);
+                if (g_client_fds[i] > max_fd)
+                    max_fd = g_client_fds[i];
             }
         }
+        pthread_mutex_unlock(&g_client_mutex);
         
         // Use select with timeout for responsiveness
         struct timeval timeout;
@@ -203,24 +212,30 @@ int main(int argc, char *argv[])
         {
             int client_fd = accept_connection(server_fd);
             
-            if (client_fd >= 0 && client_count < MAX_CLIENTS)
+            if (client_fd >= 0)
             {
-                // Add to client list
-                client_fds[client_count++] = client_fd;
-            }
-            else if (client_fd >= 0)
-            {
-                // Too many clients, close connection
-                close(client_fd);
+                pthread_mutex_lock(&g_client_mutex);
+                if (g_client_count < MAX_CLIENTS)
+                {
+                    // Add to client list
+                    g_client_fds[g_client_count++] = client_fd;
+                }
+                else
+                {
+                    // Too many clients, close connection
+                    close(client_fd);
+                }
+                pthread_mutex_unlock(&g_client_mutex);
             }
         }
         
         // Check for data on client sockets
-        for (int i = 0; i < client_count; i++)
+        pthread_mutex_lock(&g_client_mutex);
+        for (int i = 0; i < g_client_count; i++)
         {
-            if (client_fds[i] >= 0 && FD_ISSET(client_fds[i], &read_fds))
+            if (g_client_fds[i] >= 0 && FD_ISSET(g_client_fds[i], &read_fds))
             {
-                int client_fd = client_fds[i];
+                int client_fd = g_client_fds[i];
                 
                 // Receive message from client
                 Message request;
@@ -235,7 +250,7 @@ int main(int argc, char *argv[])
                     {
                         // Queue full or shutdown, close connection
                         close(client_fd);
-                        client_fds[i] = -1; // Mark as closed
+                        g_client_fds[i] = -1; // Mark as closed
                     }
                     // Keep client in list for more requests - don't remove it
                 }
@@ -243,21 +258,22 @@ int main(int argc, char *argv[])
                 {
                     // Failed to receive message (error or connection closed)
                     close(client_fd);
-                    client_fds[i] = -1; // Mark as closed
+                    g_client_fds[i] = -1; // Mark as closed
                 }
             }
         }
         
         // Clean up closed client sockets
         int write_idx = 0;
-        for (int i = 0; i < client_count; i++)
+        for (int i = 0; i < g_client_count; i++)
         {
-            if (client_fds[i] >= 0)
+            if (g_client_fds[i] >= 0)
             {
-                client_fds[write_idx++] = client_fds[i];
+                g_client_fds[write_idx++] = g_client_fds[i];
             }
         }
-        client_count = write_idx;
+        g_client_count = write_idx;
+        pthread_mutex_unlock(&g_client_mutex);
     }
     
     // Cleanup
@@ -268,4 +284,41 @@ int main(int argc, char *argv[])
     printf("Server stopped\n");
     
     return 0;
+}
+
+// Broadcast message to all connected clients
+void broadcast_to_all_clients(const char *username, const char *message)
+{
+    if (!username || !message)
+        return;
+    
+    // Create broadcast message
+    Message broadcast;
+    memset(&broadcast, 0, sizeof(Message));
+    broadcast.header.magic = 0xABCD;
+    broadcast.header.msg_type = MSG_CHAT_BROADCAST;
+    
+    // Format: "username: message"
+    snprintf(broadcast.payload, MAX_PAYLOAD_SIZE, "%s: %s", username, message);
+    broadcast.header.msg_length = strlen(broadcast.payload);
+    
+    // Calculate checksum
+    broadcast.header.checksum = calculate_checksum(broadcast.payload, (int)broadcast.header.msg_length);
+    
+    // Send to all connected clients
+    pthread_mutex_lock(&g_client_mutex);
+    for (int i = 0; i < g_client_count; i++)
+    {
+        if (g_client_fds[i] >= 0)
+        {
+            // Send header
+            ssize_t sent = send(g_client_fds[i], &broadcast.header, sizeof(MessageHeader), MSG_NOSIGNAL);
+            if (sent > 0 && broadcast.header.msg_length > 0)
+            {
+                // Send payload
+                send(g_client_fds[i], broadcast.payload, broadcast.header.msg_length, MSG_NOSIGNAL);
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_client_mutex);
 }

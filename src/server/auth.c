@@ -3,10 +3,14 @@
 #include "../include/auth.h"
 #include "../include/database.h"
 #include "../include/protocol.h"
+#include "../include/types.h"
+#include "../include/quests.h"
+#include "../include/login_rewards.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
+#include <sqlite3.h>
 
 // Simple hash function (for testing without OpenSSL)
 void hash_password(const char *password, char *output)
@@ -84,6 +88,43 @@ int register_user(const char *username, const char *password, User *out_user)
         return ERR_DATABASE_ERROR;
     }
 
+    // Give free Consumer skin to new user
+    // Find a Consumer rarity skin definition
+    int consumer_def_id = 0;
+    sqlite3 *db;
+    if (sqlite3_open("data/database.db", &db) == SQLITE_OK)
+    {
+        const char *sql = "SELECT definition_id FROM skin_definitions WHERE rarity = 0 LIMIT 1";
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK)
+        {
+            if (sqlite3_step(stmt) == SQLITE_ROW)
+            {
+                consumer_def_id = sqlite3_column_int(stmt, 0);
+            }
+            sqlite3_finalize(stmt);
+        }
+        sqlite3_close(db);
+    }
+    
+    if (consumer_def_id > 0)
+    {
+        // Create skin instance with Consumer rarity
+        int instance_id = 0;
+        WearCondition wear = 0.05f; // Factory New
+        int pattern_seed = 0;
+        int is_stattrak = 0;
+        
+        if (db_create_skin_instance(consumer_def_id, RARITY_CONSUMER, wear, pattern_seed, is_stattrak, new_user.user_id, &instance_id) == 0)
+        {
+            // Add to inventory
+            db_add_to_inventory(new_user.user_id, instance_id);
+        }
+    }
+
+    // Initialize daily quests for new user
+    init_daily_quests(new_user.user_id);
+
     // new_user.user_id should now be set by db_save_user
     *out_user = new_user;
     return ERR_SUCCESS;
@@ -133,6 +174,19 @@ int login_user(const char *username, const char *password, Session *out_session)
     // Update user last_login
     user.last_login = time(NULL);
     db_update_user(&user);
+    
+    // Update login streak
+    update_login_streak(user.user_id);
+    
+    // Initialize daily quests if not exist (or reset if new day)
+    // Check if user has quests for today
+    Quest quests[10];
+    int quest_count = 0;
+    if (get_user_quests(user.user_id, quests, &quest_count) != 0 || quest_count == 0)
+    {
+        // No quests or failed to load, initialize new quests
+        init_daily_quests(user.user_id);
+    }
 
     *out_session = session;
     return ERR_SUCCESS;

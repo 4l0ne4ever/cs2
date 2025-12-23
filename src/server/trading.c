@@ -3,6 +3,8 @@
 #include "../include/trading.h"
 #include "../include/database.h"
 #include "../include/types.h"
+#include "../include/quests.h"
+#include "../include/achievements.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -197,10 +199,8 @@ int validate_trade(TradeOffer *offer)
         if (owner_id != offer->from_user_id)
             return -3; // Not owner
 
-        // Check trade lock
-        int is_locked;
-        if (db_check_trade_lock(instance_id, &is_locked) == 0 && is_locked)
-            return -4; // Item is trade locked
+        // Note: Trade lock check removed - items are only locked when listed on market
+        // Trading between users does not require items to be unlocked
     }
 
     // Check if to_user owns requested items
@@ -224,10 +224,8 @@ int validate_trade(TradeOffer *offer)
         if (owner_id != offer->to_user_id)
             return -6; // Not owner
 
-        // Check trade lock
-        int is_locked;
-        if (db_check_trade_lock(instance_id, &is_locked) == 0 && is_locked)
-            return -7; // Item is trade locked
+        // Note: Trade lock check removed - items are only locked when listed on market
+        // Trading between users does not require items to be unlocked
     }
 
     // Check cash balances
@@ -249,6 +247,13 @@ int validate_trade(TradeOffer *offer)
 
         if (to_user.balance < offer->requested_cash)
             return -11; // Insufficient funds
+    }
+
+    // Validate: must offer something OR request something (or both)
+    if (offer->offered_count == 0 && offer->offered_cash == 0.0f && 
+        offer->requested_count == 0 && offer->requested_cash == 0.0f)
+    {
+        return -12; // Empty trade
     }
 
     return 0;
@@ -281,8 +286,7 @@ int execute_trade(TradeOffer *offer)
         if (db_add_to_inventory(offer->to_user_id, instance_id) != 0)
             return -3; // Failed to add to inventory
 
-        // Apply trade lock
-        db_apply_trade_lock(instance_id);
+        // Note: Items traded between users are NOT trade locked - only items listed on market are locked
     }
 
     // Transfer requested items from to_user to from_user
@@ -303,8 +307,7 @@ int execute_trade(TradeOffer *offer)
         if (db_add_to_inventory(offer->from_user_id, instance_id) != 0)
             return -5; // Failed to add to inventory
 
-        // Apply trade lock
-        db_apply_trade_lock(instance_id);
+        // Note: Items traded between users are NOT trade locked - only items listed on market are locked
     }
 
     // Transfer cash
@@ -341,6 +344,25 @@ int execute_trade(TradeOffer *offer)
         if (db_update_user(&to_user) != 0)
             return -13;
     }
+
+    // Update quests and achievements
+    // First Steps quest: Complete 3 trades
+    update_quest_progress(offer->from_user_id, QUEST_FIRST_STEPS, 1);
+    update_quest_progress(offer->to_user_id, QUEST_FIRST_STEPS, 1);
+    
+    // Social Trader quest: Trade with different users
+    // Track unique users traded with (simplified - just increment)
+    update_quest_progress(offer->from_user_id, QUEST_SOCIAL_TRADER, 1);
+    update_quest_progress(offer->to_user_id, QUEST_SOCIAL_TRADER, 1);
+    
+    // Check achievements
+    // First Trade achievement
+    unlock_achievement(offer->from_user_id, ACHIEVEMENT_FIRST_TRADE);
+    unlock_achievement(offer->to_user_id, ACHIEVEMENT_FIRST_TRADE);
+    
+    // Check quest completion
+    check_quest_completion(offer->from_user_id);
+    check_quest_completion(offer->to_user_id);
 
     return 0;
 }

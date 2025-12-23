@@ -418,6 +418,43 @@ int db_init()
         "FOREIGN KEY (seller_id) REFERENCES users(user_id), "
         "FOREIGN KEY (instance_id) REFERENCES skin_instances(instance_id)"
         ");"
+        "CREATE TABLE IF NOT EXISTS quests ("
+        "quest_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "user_id INTEGER NOT NULL, "
+        "quest_type INTEGER NOT NULL, "
+        "progress INTEGER NOT NULL DEFAULT 0, "
+        "target INTEGER NOT NULL, "
+        "is_completed INTEGER NOT NULL DEFAULT 0, "
+        "is_claimed INTEGER NOT NULL DEFAULT 0, "
+        "started_at INTEGER NOT NULL, "
+        "completed_at INTEGER, "
+        "FOREIGN KEY (user_id) REFERENCES users(user_id)"
+        ");"
+        "CREATE TABLE IF NOT EXISTS achievements ("
+        "achievement_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "user_id INTEGER NOT NULL, "
+        "achievement_type INTEGER NOT NULL, "
+        "is_unlocked INTEGER NOT NULL DEFAULT 0, "
+        "is_claimed INTEGER NOT NULL DEFAULT 0, "
+        "unlocked_at INTEGER, "
+        "FOREIGN KEY (user_id) REFERENCES users(user_id), "
+        "UNIQUE(user_id, achievement_type)"
+        ");"
+        "CREATE TABLE IF NOT EXISTS login_streaks ("
+        "user_id INTEGER PRIMARY KEY, "
+        "current_streak INTEGER NOT NULL DEFAULT 0, "
+        "last_login_date INTEGER NOT NULL, "
+        "last_reward_date INTEGER, "
+        "FOREIGN KEY (user_id) REFERENCES users(user_id)"
+        ");"
+        "CREATE TABLE IF NOT EXISTS chat_messages ("
+        "message_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "user_id INTEGER NOT NULL, "
+        "username TEXT NOT NULL, "
+        "message TEXT NOT NULL, "
+        "timestamp INTEGER NOT NULL, "
+        "FOREIGN KEY (user_id) REFERENCES users(user_id)"
+        ");"
         "CREATE INDEX IF NOT EXISTS idx_skins_owner ON skins(owner_id);"
         "CREATE INDEX IF NOT EXISTS idx_inventories_user ON inventories(user_id);"
         "CREATE INDEX IF NOT EXISTS idx_inventories_skin ON inventories(skin_id);"
@@ -441,7 +478,10 @@ int db_init()
         "CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_id);"
         "CREATE INDEX IF NOT EXISTS idx_case_skins_definition ON case_skins(definition_id);"
         "CREATE INDEX IF NOT EXISTS idx_transaction_logs_user ON transaction_logs(user_id, timestamp);"
-        "CREATE INDEX IF NOT EXISTS idx_skin_definitions_name ON skin_definitions(name);";
+        "CREATE INDEX IF NOT EXISTS idx_skin_definitions_name ON skin_definitions(name);"
+        "CREATE INDEX IF NOT EXISTS idx_quests_user ON quests(user_id, is_completed, is_claimed);"
+        "CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements(user_id, is_unlocked, is_claimed);"
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp);";
 
     rc = sqlite3_exec(db, schema_sql, 0, 0, &err_msg);
     if (rc != SQLITE_OK)
@@ -1799,7 +1839,7 @@ int db_check_trade_lock(int instance_id, int *is_locked)
         int is_tradable = sqlite3_column_int(stmt, 0);
         time_t acquired_at = sqlite3_column_int64(stmt, 1);
         time_t now = time(NULL);
-        time_t lock_duration = 7 * 24 * 60 * 60; // 7 days in seconds
+        time_t lock_duration = 1 * 24 * 60 * 60; // 1 day in seconds (changed from 7 days)
 
         if (is_tradable == 0 || (now - acquired_at) < lock_duration)
         {
@@ -1838,7 +1878,7 @@ int db_apply_trade_lock(int instance_id)
 int db_unlock_expired_trades()
 {
     time_t now = time(NULL);
-    time_t lock_duration = 7 * 24 * 60 * 60; // 7 days
+    time_t lock_duration = 1 * 24 * 60 * 60; // 1 day (changed from 7 days)
     time_t threshold = now - lock_duration;
 
     const char *sql = "UPDATE skin_instances SET is_tradable = 1 WHERE is_tradable = 0 AND acquired_at <= ?";
@@ -2119,4 +2159,315 @@ int db_get_report_count(int user_id)
 
     sqlite3_finalize(stmt);
     return count;
+}
+
+// ==================== QUESTS OPERATIONS ====================
+
+int db_save_quest(Quest *quest)
+{
+    if (!quest)
+        return -1;
+
+    const char *sql = "INSERT INTO quests (user_id, quest_type, progress, target, is_completed, is_claimed, started_at, completed_at) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, quest->user_id);
+    sqlite3_bind_int(stmt, 2, quest->quest_type);
+    sqlite3_bind_int(stmt, 3, quest->progress);
+    sqlite3_bind_int(stmt, 4, quest->target);
+    sqlite3_bind_int(stmt, 5, quest->is_completed);
+    sqlite3_bind_int(stmt, 6, quest->is_claimed);
+    sqlite3_bind_int64(stmt, 7, quest->started_at);
+    if (quest->completed_at > 0)
+        sqlite3_bind_int64(stmt, 8, quest->completed_at);
+    else
+        sqlite3_bind_null(stmt, 8);
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE && quest->quest_id == 0)
+    {
+        quest->quest_id = (int)sqlite3_last_insert_rowid(db);
+    }
+    sqlite3_finalize(stmt);
+
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_load_user_quests(int user_id, Quest *out_quests, int *count)
+{
+    if (!out_quests || !count)
+        return -1;
+
+    const char *sql = "SELECT quest_id, user_id, quest_type, progress, target, is_completed, is_claimed, started_at, completed_at "
+                      "FROM quests WHERE user_id = ? AND is_completed = 0 ORDER BY quest_type";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+    {
+        *count = 0;
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, user_id);
+
+    int idx = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && idx < 10)
+    {
+        out_quests[idx].quest_id = sqlite3_column_int(stmt, 0);
+        out_quests[idx].user_id = sqlite3_column_int(stmt, 1);
+        out_quests[idx].quest_type = (QuestType)sqlite3_column_int(stmt, 2);
+        out_quests[idx].progress = sqlite3_column_int(stmt, 3);
+        out_quests[idx].target = sqlite3_column_int(stmt, 4);
+        out_quests[idx].is_completed = sqlite3_column_int(stmt, 5);
+        out_quests[idx].is_claimed = sqlite3_column_int(stmt, 6);
+        out_quests[idx].started_at = sqlite3_column_int64(stmt, 7);
+        const char *completed_at_str = (const char *)sqlite3_column_text(stmt, 8);
+        out_quests[idx].completed_at = completed_at_str ? sqlite3_column_int64(stmt, 8) : 0;
+        idx++;
+    }
+
+    *count = idx;
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+int db_update_quest(Quest *quest)
+{
+    if (!quest)
+        return -1;
+
+    const char *sql = "UPDATE quests SET progress = ?, is_completed = ?, is_claimed = ?, completed_at = ? WHERE quest_id = ?";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, quest->progress);
+    sqlite3_bind_int(stmt, 2, quest->is_completed);
+    sqlite3_bind_int(stmt, 3, quest->is_claimed);
+    if (quest->completed_at > 0)
+        sqlite3_bind_int64(stmt, 4, quest->completed_at);
+    else
+        sqlite3_bind_null(stmt, 4);
+    sqlite3_bind_int(stmt, 5, quest->quest_id);
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+// ==================== ACHIEVEMENTS OPERATIONS ====================
+
+int db_save_achievement(Achievement *achievement)
+{
+    if (!achievement)
+        return -1;
+
+    const char *sql = "INSERT OR REPLACE INTO achievements (user_id, achievement_type, is_unlocked, is_claimed, unlocked_at) "
+                      "VALUES (?, ?, ?, ?, ?)";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, achievement->user_id);
+    sqlite3_bind_int(stmt, 2, achievement->achievement_type);
+    sqlite3_bind_int(stmt, 3, achievement->is_unlocked);
+    sqlite3_bind_int(stmt, 4, achievement->is_claimed);
+    if (achievement->unlocked_at > 0)
+        sqlite3_bind_int64(stmt, 5, achievement->unlocked_at);
+    else
+        sqlite3_bind_null(stmt, 5);
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE && achievement->achievement_id == 0)
+    {
+        achievement->achievement_id = (int)sqlite3_last_insert_rowid(db);
+    }
+    sqlite3_finalize(stmt);
+
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_load_user_achievements(int user_id, Achievement *out_achievements, int *count)
+{
+    if (!out_achievements || !count)
+        return -1;
+
+    const char *sql = "SELECT achievement_id, user_id, achievement_type, is_unlocked, is_claimed, unlocked_at "
+                      "FROM achievements WHERE user_id = ? ORDER BY achievement_type";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+    {
+        *count = 0;
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, user_id);
+
+    int idx = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && idx < 10)
+    {
+        out_achievements[idx].achievement_id = sqlite3_column_int(stmt, 0);
+        out_achievements[idx].user_id = sqlite3_column_int(stmt, 1);
+        out_achievements[idx].achievement_type = (AchievementType)sqlite3_column_int(stmt, 2);
+        out_achievements[idx].is_unlocked = sqlite3_column_int(stmt, 3);
+        out_achievements[idx].is_claimed = sqlite3_column_int(stmt, 4);
+        const char *unlocked_at_str = (const char *)sqlite3_column_text(stmt, 5);
+        out_achievements[idx].unlocked_at = unlocked_at_str ? sqlite3_column_int64(stmt, 5) : 0;
+        idx++;
+    }
+
+    *count = idx;
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+int db_update_achievement(Achievement *achievement)
+{
+    if (!achievement)
+        return -1;
+
+    const char *sql = "UPDATE achievements SET is_unlocked = ?, is_claimed = ?, unlocked_at = ? WHERE achievement_id = ?";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, achievement->is_unlocked);
+    sqlite3_bind_int(stmt, 2, achievement->is_claimed);
+    if (achievement->unlocked_at > 0)
+        sqlite3_bind_int64(stmt, 3, achievement->unlocked_at);
+    else
+        sqlite3_bind_null(stmt, 3);
+    sqlite3_bind_int(stmt, 4, achievement->achievement_id);
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+// ==================== LOGIN STREAK OPERATIONS ====================
+
+int db_save_login_streak(LoginStreak *streak)
+{
+    if (!streak)
+        return -1;
+
+    const char *sql = "INSERT OR REPLACE INTO login_streaks (user_id, current_streak, last_login_date, last_reward_date) "
+                      "VALUES (?, ?, ?, ?)";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, streak->user_id);
+    sqlite3_bind_int(stmt, 2, streak->current_streak);
+    sqlite3_bind_int64(stmt, 3, streak->last_login_date);
+    if (streak->last_reward_date > 0)
+        sqlite3_bind_int64(stmt, 4, streak->last_reward_date);
+    else
+        sqlite3_bind_null(stmt, 4);
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_load_login_streak(int user_id, LoginStreak *out_streak)
+{
+    if (!out_streak)
+        return -1;
+
+    const char *sql = "SELECT user_id, current_streak, last_login_date, last_reward_date FROM login_streaks WHERE user_id = ?";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, user_id);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        out_streak->user_id = sqlite3_column_int(stmt, 0);
+        out_streak->current_streak = sqlite3_column_int(stmt, 1);
+        out_streak->last_login_date = sqlite3_column_int64(stmt, 2);
+        const char *last_reward_str = (const char *)sqlite3_column_text(stmt, 3);
+        out_streak->last_reward_date = last_reward_str ? sqlite3_column_int64(stmt, 3) : 0;
+        sqlite3_finalize(stmt);
+        return 0;
+    }
+
+    sqlite3_finalize(stmt);
+    return -1;
+}
+
+// ==================== CHAT OPERATIONS ====================
+
+int db_save_chat_message(int user_id, const char *username, const char *message)
+{
+    if (!username || !message)
+        return -1;
+
+    const char *sql = "INSERT INTO chat_messages (user_id, username, message, timestamp) VALUES (?, ?, ?, ?)";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, user_id);
+    sqlite3_bind_text(stmt, 2, username, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, message, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 4, time(NULL));
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_load_recent_chat_messages(ChatMessage *out_messages, int *count, int limit)
+{
+    if (!out_messages || !count)
+        return -1;
+
+    if (limit <= 0 || limit > MAX_CHAT_HISTORY)
+        limit = MAX_CHAT_HISTORY;
+
+    const char *sql = "SELECT message_id, user_id, username, message, timestamp "
+                      "FROM chat_messages ORDER BY timestamp DESC LIMIT ?";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+    {
+        *count = 0;
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, limit);
+
+    int idx = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && idx < limit)
+    {
+        out_messages[idx].message_id = sqlite3_column_int(stmt, 0);
+        out_messages[idx].user_id = sqlite3_column_int(stmt, 1);
+        strncpy(out_messages[idx].username, (char *)sqlite3_column_text(stmt, 2), MAX_USERNAME_LEN - 1);
+        out_messages[idx].username[MAX_USERNAME_LEN - 1] = '\0';
+        strncpy(out_messages[idx].message, (char *)sqlite3_column_text(stmt, 3), 255);
+        out_messages[idx].message[255] = '\0';
+        out_messages[idx].timestamp = sqlite3_column_int64(stmt, 4);
+        idx++;
+    }
+
+    *count = idx;
+    sqlite3_finalize(stmt);
+    return 0;
 }

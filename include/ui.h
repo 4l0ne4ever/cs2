@@ -15,6 +15,7 @@
 #define COLOR_BRIGHT_RED "\033[91m"
 #define COLOR_BRIGHT_GREEN "\033[92m"
 #define COLOR_BRIGHT_YELLOW "\033[93m"
+#define COLOR_DIM "\033[2m"
 
 // ANSI Styles
 #define STYLE_BOLD "\033[1m"
