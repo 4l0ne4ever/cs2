@@ -352,6 +352,77 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
         break;
     }
     
+    case MSG_REMOVE_FROM_MARKET:
+    {
+        // Parse: user_id:listing_id
+        uint32_t user_id, listing_id;
+        if (sscanf((char *)request->payload, "%u:%u", &user_id, &listing_id) != 2)
+        {
+            create_error_response(response, MSG_REMOVE_FROM_MARKET, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        // Verify listing belongs to user
+        int seller_id, instance_id, is_sold;
+        float price;
+        if (db_get_listing_v2((int)listing_id, &seller_id, &instance_id, &price, &is_sold) != 0)
+        {
+            create_error_response(response, MSG_REMOVE_FROM_MARKET, ERR_ITEM_NOT_FOUND);
+            return send_response(client_fd, response);
+        }
+        
+        if (seller_id != (int)user_id)
+        {
+            create_error_response(response, MSG_REMOVE_FROM_MARKET, ERR_PERMISSION_DENIED);
+            return send_response(client_fd, response);
+        }
+        
+        if (is_sold)
+        {
+            create_error_response(response, MSG_REMOVE_FROM_MARKET, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        int result = remove_listing((int)listing_id);
+        if (result == 0)
+        {
+            create_success_response(response, MSG_REMOVE_FROM_MARKET, NULL, 0);
+        }
+        else
+        {
+            create_error_response(response, MSG_REMOVE_FROM_MARKET, result);
+        }
+        break;
+    }
+    
+    case MSG_SEARCH_MARKET_BY_NAME:
+    {
+        // Parse: search_term (skin name)
+        char search_term[256];
+        if (sscanf((char *)request->payload, "%255s", search_term) != 1)
+        {
+            create_error_response(response, MSG_SEARCH_MARKET_BY_NAME, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        MarketListing listings[100];
+        int count = 0;
+        int result = search_market_listings_by_name(search_term, listings, &count);
+        
+        if (result == 0 && count > 0)
+        {
+            // Send search results
+            create_success_response(response, MSG_MARKET_DATA, listings, sizeof(MarketListing) * count);
+            response->header.msg_length = sizeof(MarketListing) * count;
+        }
+        else
+        {
+            // No results found
+            create_success_response(response, MSG_MARKET_DATA, NULL, 0);
+        }
+        break;
+    }
+    
     default:
         create_error_response(response, request->header.msg_type, ERR_INVALID_REQUEST);
         break;
@@ -367,13 +438,55 @@ static int handle_trading_request(int client_fd, Message *request, Message *resp
     {
     case MSG_SEND_TRADE_OFFER:
     {
-        // Parse trade offer from payload (simplified - would need proper serialization)
-        // Format: from_user:to_user:offered_skins:requested_skins:offered_cash:requested_cash
-        TradeOffer offer;
-        memset(&offer, 0, sizeof(TradeOffer));
+        // Parse TradeOffer struct directly from payload
+        // Client sends the entire TradeOffer struct as binary data
+        if (request->header.msg_length < sizeof(TradeOffer))
+        {
+            create_error_response(response, MSG_SEND_TRADE_OFFER, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
         
-        // For now, return error - proper implementation would deserialize TradeOffer
-        create_error_response(response, MSG_SEND_TRADE_OFFER, ERR_INVALID_REQUEST);
+        TradeOffer offer;
+        memcpy(&offer, request->payload, sizeof(TradeOffer));
+        
+        // Validate offer structure
+        if (offer.from_user_id <= 0 || offer.to_user_id <= 0 || 
+            offer.from_user_id == offer.to_user_id ||
+            offer.offered_count < 0 || offer.offered_count > 10 ||
+            offer.requested_count < 0 || offer.requested_count > 10 ||
+            offer.offered_cash < 0 || offer.requested_cash < 0)
+        {
+            create_error_response(response, MSG_SEND_TRADE_OFFER, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        // Send trade offer
+        int result = send_trade_offer(offer.from_user_id, offer.to_user_id, &offer);
+        if (result == 0)
+        {
+            // Return the created trade offer with trade_id
+            create_success_response(response, MSG_SEND_TRADE_OFFER, &offer, sizeof(TradeOffer));
+            response->header.msg_length = sizeof(TradeOffer);
+        }
+        else
+        {
+            // Map error codes
+            uint32_t error_code = ERR_INVALID_REQUEST;
+            if (result == -1)
+                error_code = ERR_INVALID_REQUEST;
+            else if (result == -2)
+                error_code = ERR_INVALID_TRADE;
+            else if (result == -3)
+                error_code = ERR_DATABASE_ERROR;
+            else if (result == -4 || result == -7)
+                error_code = ERR_TRADE_LOCKED;
+            else if (result == -5 || result == -6)
+                error_code = ERR_PERMISSION_DENIED;
+            else if (result == -9 || result == -11)
+                error_code = ERR_INSUFFICIENT_FUNDS;
+            
+            create_error_response(response, MSG_SEND_TRADE_OFFER, error_code);
+        }
         break;
     }
     
@@ -604,6 +717,31 @@ static int handle_inventory_request(int client_fd, Message *request, Message *re
         break;
     }
     
+    case MSG_SEARCH_USER_BY_USERNAME:
+    {
+        // Parse: username
+        char username[MAX_USERNAME_LEN];
+        if (sscanf((char *)request->payload, "%31s", username) != 1)
+        {
+            create_error_response(response, MSG_SEARCH_USER_BY_USERNAME, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        User user;
+        int result = db_load_user_by_username(username, &user);
+        
+        if (result == 0)
+        {
+            create_success_response(response, MSG_SEARCH_USER_RESPONSE, &user, sizeof(User));
+            response->header.msg_length = sizeof(User);
+        }
+        else
+        {
+            create_error_response(response, MSG_SEARCH_USER_BY_USERNAME, ERR_ITEM_NOT_FOUND);
+        }
+        break;
+    }
+    
     case MSG_GET_SKIN_DETAILS:
     {
         // Parse: instance_id
@@ -705,7 +843,7 @@ int handle_client_request(int client_fd, Message *request)
     {
         handle_auth_request(client_fd, request, &response);
     }
-    else if (msg_type >= MSG_GET_MARKET_LISTINGS && msg_type <= MSG_PRICE_UPDATE)
+    else if (msg_type >= MSG_GET_MARKET_LISTINGS && msg_type <= MSG_SEARCH_MARKET_BY_NAME)
     {
         handle_market_request(client_fd, request, &response);
     }
@@ -713,7 +851,7 @@ int handle_client_request(int client_fd, Message *request)
     {
         handle_trading_request(client_fd, request, &response);
     }
-    else if (msg_type >= MSG_GET_INVENTORY && msg_type <= MSG_SKIN_DETAILS_DATA)
+    else if (msg_type >= MSG_GET_INVENTORY && msg_type <= MSG_SEARCH_USER_RESPONSE)
     {
         handle_inventory_request(client_fd, request, &response);
     }

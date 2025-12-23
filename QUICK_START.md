@@ -30,6 +30,31 @@ make all
 make init_db
 ```
 
+## Bước 3.5: Thêm Demo Data (Users và Market Listings) - Khuyến nghị
+
+Để demo dễ dàng hơn, bạn có thể thêm sẵn users và items trên market:
+
+```bash
+make add_demo
+```
+
+Script này sẽ tạo:
+- **8 demo users** với balance khác nhau:
+  - `player1` - $500.00
+  - `player2` - $750.00
+  - `player3` - $1000.00
+  - `trader1` - $2000.00
+  - `trader2` - $1500.00
+  - `richguy` - $5000.00
+  - `newbie` - $100.00
+  - `pro` - $3000.00
+- **Skin instances** cho mỗi user (3-8 skins mỗi user)
+- **Market listings** (một số items đã được list sẵn trên market)
+
+**Tất cả users có password:** `123456`
+
+**Lưu ý:** Script này có thể chạy nhiều lần - nó sẽ update balance nếu user đã tồn tại.
+
 ---
 
 ## Bước 4: Chạy Demo
@@ -63,27 +88,20 @@ make run_client
 
 ## Demo Flow
 
-### 1. Đăng Ký Tài Khoản
+### 1. Đăng Nhập (Nếu đã chạy `make add_demo`)
 
-Khi client khởi động, bạn sẽ thấy menu:
+Nếu bạn đã chạy `make add_demo`, bạn có thể đăng nhập ngay với các tài khoản demo:
 
-```
-[1] Login
-[2] Register
-```
+- Username: `player1`, `player2`, `player3`, `trader1`, `trader2`, `richguy`, `newbie`, hoặc `pro`
+- Password: `123456`
 
-Chọn `2` để đăng ký:
+### 2. Đăng Ký Tài Khoản Mới (Tùy chọn)
 
-- Nhập username (ví dụ: `player1`)
-- Nhập password (ví dụ: `123456`)
+Nếu muốn tạo tài khoản mới, chọn `2` để đăng ký:
+
+- Nhập username (tối thiểu 3 ký tự)
+- Nhập password (tối thiểu 6 ký tự)
 - Bạn sẽ nhận $100.00 balance ban đầu
-
-### 2. Đăng Nhập
-
-Sau khi đăng ký, chọn `1` để đăng nhập:
-
-- Nhập username và password vừa tạo
-- Sau khi đăng nhập thành công, bạn sẽ thấy menu chính
 
 ### 3. Menu Chính
 
@@ -108,43 +126,51 @@ Sau khi đăng ký, chọn `1` để đăng nhập:
 
 **Lưu ý:** Skin mới unbox sẽ bị trade lock 7 ngày.
 
-### 5. Demo: Xem Inventory
+### 5. Demo: Xem Market
+
+1. Chọn `2` (Market)
+2. Bạn sẽ thấy danh sách items đang được bán trên market
+3. Có thể:
+   - **Mua item**: Nhập số thứ tự của listing
+   - **Tìm kiếm**: Nhập `S` để search theo tên skin
+   - **Xóa search**: Nhập `C` để clear search filter
+   - **Gỡ listing**: Nhập `R<number>` để remove listing của bạn (nếu có)
+
+**Lưu ý:** Nếu đã chạy `make add_demo`, bạn sẽ thấy một số items đã được list sẵn trên market.
+
+### 6. Demo: Xem Inventory
 
 1. Chọn `1` (Inventory)
-2. Bạn sẽ thấy tất cả skins trong inventory
-3. Mỗi skin hiển thị:
-   - Tên skin
-   - Rarity (màu sắc theo CS2)
-   - Float value
+2. Bạn sẽ thấy danh sách skins trong inventory với đầy đủ thông tin:
+   - Rarity với màu sắc
+   - StatTrak™ indicator
+   - Skin name
+   - Wear condition
    - Pattern seed
-   - StatTrak (nếu có)
-   - Trade lock status
+   - Price
+3. Có thể **bán item lên market**: Nhập số thứ tự của item, sau đó nhập giá
+4. Skin mới unbox sẽ có `[Trade Locked]` - không thể trade/bán trong 7 ngày
 
-### 6. Demo: Market
+### 7. Demo: Trading
 
-**List Skin để bán:**
+1. Chọn `3` (Trading)
+2. Xem pending trade offers:
+   - Incoming trades (từ user khác)
+   - Outgoing trades (bạn đã gửi)
+3. Có thể:
+   - **Accept/Decline** incoming trades
+   - **Cancel** outgoing trades
+   - **Gửi trade offer mới**: Nhập `N` để search user và gửi trade offer
 
-1. Chọn `2` (Market)
-2. Chọn `1` (List Skin)
-3. Chọn skin từ inventory
-4. Nhập giá bạn muốn bán
-5. Skin sẽ xuất hiện trên market
-
-**Mua Skin:**
-
-1. Chọn `2` (Market)
-2. Chọn `2` (Browse Market)
-3. Xem danh sách skins đang bán
-4. Chọn skin và mua
-5. Skin sẽ được chuyển vào inventory của bạn
-
-### 7. Demo: Profile
+### 8. Demo: Profile & Search Users
 
 1. Chọn `5` (Profile)
-2. Xem thông tin:
-   - Username
-   - Balance
-   - Số lượng skins trong inventory
+2. Menu options:
+   - **Option 1**: Xem profile của bạn (balance, inventory value, total value)
+   - **Option 2**: Tìm kiếm user khác bằng username
+3. Khi tìm thấy user khác, bạn có thể:
+   - Xem profile của họ
+   - **Gửi trade offer** cho họ
 
 ---
 
@@ -177,8 +203,9 @@ make all
 
 ```bash
 # Xóa database cũ và tạo lại
-rm -f data/cs2_trading.db
+rm -f data/database.db
 make init_db
+make add_demo  # Thêm demo data
 ```
 
 ---

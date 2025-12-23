@@ -65,6 +65,7 @@ int db_fetch_full_case_info(int case_id, void *out_skins, int *out_count);
 // Market listings v2 operations (using instance_id)
 int db_save_listing_v2(int seller_id, int instance_id, float price, int *out_listing_id);
 int db_load_listings_v2(MarketListing *out_listings, int *count);
+int db_search_listings_by_name(const char *search_term, MarketListing *out_listings, int *count);
 int db_get_listing_v2(int listing_id, int *seller_id, int *instance_id, float *price, int *is_sold);
 int db_mark_listing_sold(int listing_id);
 int db_remove_listing_v2(int listing_id);

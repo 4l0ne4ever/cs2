@@ -19,6 +19,15 @@ int get_market_listings(MarketListing *out_listings, int *count)
     return db_load_listings_v2(out_listings, count);
 }
 
+// Search market listings by skin name
+int search_market_listings_by_name(const char *search_term, MarketListing *out_listings, int *count)
+{
+    if (!search_term || !out_listings || !count)
+        return -1;
+
+    return db_search_listings_by_name(search_term, out_listings, count);
+}
+
 // List a skin instance on market
 int list_skin_on_market(int user_id, int instance_id, float price)
 {

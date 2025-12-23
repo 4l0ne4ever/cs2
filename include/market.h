@@ -6,6 +6,9 @@
 // List all market listings
 int get_market_listings(MarketListing *out_listings, int *count);
 
+// Search market listings by skin name
+int search_market_listings_by_name(const char *search_term, MarketListing *out_listings, int *count);
+
 // List specific skin instance on market
 int list_skin_on_market(int user_id, int instance_id, float price);
 

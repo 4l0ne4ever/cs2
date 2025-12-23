@@ -1676,6 +1676,50 @@ int db_load_listings_v2(MarketListing *out_listings, int *count)
     return 0;
 }
 
+int db_search_listings_by_name(const char *search_term, MarketListing *out_listings, int *count)
+{
+    if (!search_term || !out_listings || !count)
+        return -1;
+
+    // Search listings by skin name using LIKE (case-insensitive)
+    const char *sql = "SELECT ml.listing_id, ml.seller_id, ml.instance_id, ml.price, ml.listed_at, ml.is_sold "
+                      "FROM market_listings_v2 ml "
+                      "INNER JOIN skin_instances si ON ml.instance_id = si.instance_id "
+                      "INNER JOIN skin_definitions sd ON si.definition_id = sd.definition_id "
+                      "WHERE ml.is_sold = 0 AND sd.name LIKE ? "
+                      "ORDER BY ml.listed_at DESC";
+    
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+    {
+        *count = 0;
+        return 0;
+    }
+
+    // Build search pattern with wildcards
+    char search_pattern[256];
+    snprintf(search_pattern, sizeof(search_pattern), "%%%s%%", search_term);
+    sqlite3_bind_text(stmt, 1, search_pattern, -1, SQLITE_STATIC);
+
+    int found = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && found < 100)
+    {
+        MarketListing *listing = &out_listings[found];
+        listing->listing_id = sqlite3_column_int(stmt, 0);
+        listing->seller_id = sqlite3_column_int(stmt, 1);
+        listing->skin_id = sqlite3_column_int(stmt, 2); // Store instance_id in skin_id field
+        listing->price = sqlite3_column_double(stmt, 3);
+        listing->listed_at = sqlite3_column_int64(stmt, 4);
+        listing->is_sold = sqlite3_column_int(stmt, 5);
+        found++;
+    }
+
+    *count = found;
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
 int db_get_listing_v2(int listing_id, int *seller_id, int *instance_id, float *price, int *is_sold)
 {
     if (!seller_id || !instance_id || !price || !is_sold)
