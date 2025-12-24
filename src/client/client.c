@@ -5,6 +5,7 @@
 #include "../include/protocol.h"
 #include "../include/types.h"
 #include "../include/utils.h"
+#include "../include/trading_challenges.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,115 @@
 
 static int g_user_id = -1;
 static char g_session_token[37] = {0};
+
+// Helper function to get definition_id from instance_id
+static int get_definition_id_from_instance(int instance_id, int *out_definition_id)
+{
+    if (!out_definition_id || instance_id <= 0)
+        return -1;
+
+    Message request, response;
+    memset(&request, 0, sizeof(Message));
+    memset(&response, 0, sizeof(Message));
+
+    request.header.magic = 0xABCD;
+    request.header.msg_type = MSG_GET_DEFINITION_ID;
+    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", instance_id);
+    request.header.msg_length = strlen(request.payload);
+
+    if (send_message_to_server(&request) != 0)
+        return -1;
+
+    if (receive_message_from_server(&response) != 0)
+        return -1;
+
+    if (response.header.msg_type == MSG_DEFINITION_ID_DATA)
+    {
+        memcpy(out_definition_id, response.payload, sizeof(int));
+        return 0;
+    }
+    else if (response.header.msg_type == MSG_ERROR)
+    {
+        return -1;
+    }
+
+    return -1;
+}
+
+// Helper function to get price trend for a skin definition
+static int get_price_trend(int definition_id, PriceTrend *out_trend)
+{
+    if (!out_trend || definition_id <= 0)
+        return -1;
+
+    Message request, response;
+    memset(&request, 0, sizeof(Message));
+    memset(&response, 0, sizeof(Message));
+
+    request.header.magic = 0xABCD;
+    request.header.msg_type = MSG_GET_PRICE_TREND;
+    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", definition_id);
+    request.header.msg_length = strlen(request.payload);
+
+    if (send_message_to_server(&request) != 0)
+        return -1;
+
+    if (receive_message_from_server(&response) != 0)
+        return -1;
+
+    if (response.header.msg_type == MSG_PRICE_TREND_DATA)
+    {
+        memcpy(out_trend, response.payload, sizeof(PriceTrend));
+        return 0;
+    }
+    else if (response.header.msg_type == MSG_ERROR)
+    {
+        return -1;
+    }
+
+    return -1;
+}
+
+// Helper function to get price history for a skin definition
+static int get_price_history(int definition_id, PriceHistoryEntry *out_history, int *count)
+{
+    if (!out_history || !count || definition_id <= 0)
+        return -1;
+
+    Message request, response;
+    memset(&request, 0, sizeof(Message));
+    memset(&response, 0, sizeof(Message));
+
+    request.header.magic = 0xABCD;
+    request.header.msg_type = MSG_GET_PRICE_HISTORY;
+    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", definition_id);
+    request.header.msg_length = strlen(request.payload);
+
+    if (send_message_to_server(&request) != 0)
+        return -1;
+
+    if (receive_message_from_server(&response) != 0)
+        return -1;
+
+    if (response.header.msg_type == MSG_PRICE_HISTORY_DATA)
+    {
+        int history_count = response.header.msg_length / sizeof(PriceHistoryEntry);
+        if (history_count > 100)
+            history_count = 100;
+
+        memcpy(out_history, response.payload, sizeof(PriceHistoryEntry) * history_count);
+        *count = history_count;
+        return 0;
+    }
+    else if (response.header.msg_type == MSG_ERROR)
+    {
+        *count = 0;
+        return -1;
+    }
+
+    *count = 0;
+    return -1;
+}
 
 // Helper function to load full skin details from server
 static int load_skin_details(int instance_id, Skin *out_skin)
@@ -271,12 +381,15 @@ void show_main_menu()
     print_menu_item("6. Quests & Achievements", 0, 2, 10);
     print_menu_item("7. Daily Rewards", 0, 2, 11);
     print_menu_item("8. Chat", 0, 2, 12);
-    print_menu_item("9. Logout", 0, 2, 13);
-    print_menu_item("10. Exit", 0, 2, 14);
+    print_menu_item("9. Leaderboards", 0, 2, 13);
+    print_menu_item("10. Trade Analytics", 0, 2, 14);
+    print_menu_item("11. Trading Challenges", 0, 2, 15);
+    print_menu_item("12. Logout", 0, 2, 16);
+    print_menu_item("13. Exit", 0, 2, 17);
 
     printf("\n");
     print_separator(50);
-    printf("Select option (1-10): ");
+    printf("Select option (1-13): ");
     fflush(stdout);
 }
 
@@ -635,11 +748,118 @@ void show_market()
                         printf("%s\n", skins[listing_idx].name);
                         printf("Wear: %s\n", wear);
                         printf("Pattern: #%d\n", skins[listing_idx].pattern_seed);
-                        printf("Price: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, listings[listing_idx].price, COLOR_RESET);
+                        printf("Price: %s$%.2f%s", COLOR_BRIGHT_GREEN, listings[listing_idx].price, COLOR_RESET);
+
+                        // Get definition_id and show price trend
+                        // Note: listings[listing_idx].skin_id contains instance_id
+                        int definition_id;
+                        if (get_definition_id_from_instance(listings[listing_idx].skin_id, &definition_id) == 0)
+                        {
+                            PriceTrend trend;
+                            if (get_price_trend(definition_id, &trend) == 0)
+                            {
+                                // Display price trend
+                                const char *trend_color = COLOR_BRIGHT_GREEN;
+                                if (trend.price_change_percent < 0)
+                                    trend_color = COLOR_BRIGHT_RED;
+                                else if (trend.price_change_percent > 0)
+                                    trend_color = COLOR_BRIGHT_GREEN;
+                                else
+                                    trend_color = COLOR_DIM;
+
+                                printf(" %s%s %.2f%%%s (24h)", trend_color, trend.trend_symbol, trend.price_change_percent, COLOR_RESET);
+                            }
+                        }
+                        printf("\n");
+
                         if (listings[listing_idx].seller_id == g_user_id)
                         {
                             printf("Status: %sYour Listing%s\n", COLOR_YELLOW, COLOR_RESET);
                         }
+                        
+                        // Show 24h price chart if available
+                        PriceHistoryEntry price_history[100];
+                        int history_count = 0;
+                        if (get_price_history(definition_id, price_history, &history_count) == 0 && history_count > 0)
+                        {
+                            printf("\n%s24h Price Chart:%s\n", COLOR_CYAN, COLOR_RESET);
+                            
+                            // Find min and max prices for scaling
+                            float min_price = price_history[0].price;
+                            float max_price = price_history[0].price;
+                            for (int i = 1; i < history_count; i++)
+                            {
+                                if (price_history[i].price < min_price)
+                                    min_price = price_history[i].price;
+                                if (price_history[i].price > max_price)
+                                    max_price = price_history[i].price;
+                            }
+                            float range = max_price - min_price;
+                            if (range < 0.01f)
+                                range = 0.01f; // Prevent division by zero
+                            
+                            // Simple ASCII graph (similar to balance graph)
+                            int graph_width = 50;
+                            int graph_height = 12;
+                            
+                            printf("Price Range: $%.2f - $%.2f\n\n", min_price, max_price);
+                            
+                            // Draw graph
+                            for (int row = graph_height - 1; row >= 0; row--)
+                            {
+                                float value = min_price + (range * row / graph_height);
+                                printf("%7.0f │", value);
+                                
+                                // Sample data points (every nth point to fit in graph_width)
+                                int sample_interval = (history_count > graph_width) ? (history_count / graph_width) : 1;
+                                int samples = (history_count < graph_width) ? history_count : graph_width;
+                                
+                                for (int col = 0; col < samples; col++)
+                                {
+                                    int idx = col * sample_interval;
+                                    if (idx >= history_count)
+                                        idx = history_count - 1;
+                                    
+                                    float normalized = (price_history[idx].price - min_price) / range;
+                                    int bar_height = (int)(normalized * graph_height);
+                                    
+                                    if (bar_height == row)
+                                        printf("█");
+                                    else if (bar_height > row)
+                                        printf("│");
+                                    else
+                                        printf(" ");
+                                }
+                                printf("\n");
+                            }
+                            
+                            // Draw x-axis
+                            printf("        └");
+                            int samples = (history_count < graph_width) ? history_count : graph_width;
+                            for (int i = 0; i < samples; i++)
+                                printf("─");
+                            printf("\n");
+                            
+                            // Print time labels (show first, middle, last)
+                            printf("        ");
+                            if (samples >= 3)
+                            {
+                                struct tm *timeinfo1 = localtime(&price_history[0].timestamp);
+                                struct tm *timeinfo2 = localtime(&price_history[history_count / 2].timestamp);
+                                struct tm *timeinfo3 = localtime(&price_history[history_count - 1].timestamp);
+                                
+                                char time_str1[16], time_str2[16], time_str3[16];
+                                strftime(time_str1, sizeof(time_str1), "%H:%M", timeinfo1);
+                                strftime(time_str2, sizeof(time_str2), "%H:%M", timeinfo2);
+                                strftime(time_str3, sizeof(time_str3), "%H:%M", timeinfo3);
+                                
+                                printf("%-15s", time_str1);
+                                printf("%-15s", time_str2);
+                                printf("%-15s", time_str3);
+                            }
+                            printf("\n");
+                        }
+                        
                         printf("\nPress Enter to continue...");
                         getchar();
                     }
@@ -898,23 +1118,59 @@ void show_unbox()
                                     Skin unboxed;
                                     memcpy(&unboxed, response.payload, sizeof(Skin));
 
-                                    // Simple animation: show opening effect
+                                    // Spinning animation: items scrolling fast then slowing down
                                     clear_screen();
                                     printf("\n\n");
-                                    for (int i = 0; i < 3; i++)
+
+                                    // Simulate spinning through items (fast -> slow)
+                                    const char *spinner_chars = "|/-\\";
+                                    const char *rarity_names[] = {"Consumer", "Industrial", "Mil-Spec", "Restricted", "Classified", "Covert", "Contraband"};
+                                    const char *rarity_colors[] = {COLOR_BLUE, COLOR_CYAN, COLOR_MAGENTA, COLOR_MAGENTA, COLOR_RED, COLOR_YELLOW, COLOR_BRIGHT_YELLOW};
+
+                                    // Fast spin phase (20 iterations, 50ms each = 1 second)
+                                    for (int i = 0; i < 20; i++)
                                     {
-                                        printf("  Opening case");
-                                        for (int j = 0; j < 3; j++)
-                                        {
-                                            printf(".");
-                                            fflush(stdout);
-                                            usleep(200000); // 200ms
-                                        }
-                                        printf("\r");
-                                        printf("                \r"); // Clear line
+                                        int rarity_idx = i % 7;
+                                        printf("\r  %s[%s]%s %s%s%s  %c  ",
+                                               rarity_colors[rarity_idx],
+                                               rarity_names[rarity_idx],
+                                               COLOR_RESET,
+                                               COLOR_DIM,
+                                               "Spinning...",
+                                               COLOR_RESET,
+                                               spinner_chars[i % 4]);
                                         fflush(stdout);
-                                        usleep(200000);
+                                        usleep(50000); // 50ms - fast
                                     }
+
+                                    // Slow spin phase (10 iterations, 150ms each = 1.5 seconds)
+                                    for (int i = 0; i < 10; i++)
+                                    {
+                                        int rarity_idx = (20 + i) % 7;
+                                        printf("\r  %s[%s]%s %s%s%s  %c  ",
+                                               rarity_colors[rarity_idx],
+                                               rarity_names[rarity_idx],
+                                               COLOR_RESET,
+                                               COLOR_DIM,
+                                               "Slowing down...",
+                                               COLOR_RESET,
+                                               spinner_chars[(20 + i) % 4]);
+                                        fflush(stdout);
+                                        usleep(150000); // 150ms - slower
+                                    }
+
+                                    // Final reveal (show actual rarity briefly before result)
+                                    const char *final_rarity_color = get_rarity_color(unboxed.rarity);
+                                    const char *final_rarity_name = rarity_to_string(unboxed.rarity);
+                                    printf("\r  %s[%s]%s %s%s%s  *  ",
+                                           final_rarity_color,
+                                           final_rarity_name,
+                                           COLOR_RESET,
+                                           COLOR_BRIGHT_GREEN,
+                                           "REVEALING...",
+                                           COLOR_RESET);
+                                    fflush(stdout);
+                                    usleep(500000); // 500ms pause before reveal
 
                                     // Display unboxed skin
                                     clear_screen();
@@ -982,6 +1238,850 @@ void show_unbox()
             break;
         }
     } // End while loop
+}
+
+// Show leaderboards
+void show_leaderboards()
+{
+    int should_exit = 0;
+    while (!should_exit)
+    {
+        clear_screen();
+        print_header("LEADERBOARDS");
+        display_balance_info();
+
+        printf("\nOptions:\n");
+        printf("1. Top Traders (by Net Worth)\n");
+        printf("2. Luckiest Unboxers\n");
+        printf("3. Most Profitable\n");
+        printf("0. Back to main menu\n");
+        printf("\nSelect option: ");
+        fflush(stdout);
+
+        char choice[32];
+        if (fgets(choice, sizeof(choice), stdin) == NULL)
+        {
+            should_exit = 1;
+            break;
+        }
+
+        int option = atoi(choice);
+        if (option == 0)
+        {
+            should_exit = 1;
+            break;
+        }
+
+        Message request, response;
+        memset(&request, 0, sizeof(Message));
+        memset(&response, 0, sizeof(Message));
+
+        uint16_t msg_type = 0;
+        uint16_t response_type = 0;
+        const char *title = "";
+
+        if (option == 1)
+        {
+            msg_type = MSG_GET_TOP_TRADERS;
+            response_type = MSG_TOP_TRADERS_DATA;
+            title = "TOP TRADERS (BY NET WORTH)";
+        }
+        else if (option == 2)
+        {
+            msg_type = MSG_GET_LUCKIEST_UNBOXERS;
+            response_type = MSG_LUCKIEST_UNBOXERS_DATA;
+            title = "LUCKIEST UNBOXERS";
+        }
+        else if (option == 3)
+        {
+            msg_type = MSG_GET_MOST_PROFITABLE;
+            response_type = MSG_MOST_PROFITABLE_DATA;
+            title = "MOST PROFITABLE";
+        }
+        else
+        {
+            print_error("Invalid option");
+            sleep(1);
+            continue;
+        }
+
+        request.header.magic = 0xABCD;
+        request.header.msg_type = msg_type;
+        snprintf(request.payload, MAX_PAYLOAD_SIZE, "10"); // Limit 10
+        request.header.msg_length = strlen(request.payload);
+
+        if (send_message_to_server(&request) != 0)
+        {
+            print_error("Failed to request leaderboard");
+            wait_for_key();
+            continue;
+        }
+
+        if (receive_message_from_server(&response) != 0)
+        {
+            print_error("Failed to receive leaderboard");
+            wait_for_key();
+            continue;
+        }
+
+        if (response.header.msg_type == response_type)
+        {
+            clear_screen();
+            print_header(title);
+            printf("\n");
+
+            int count = response.header.msg_length / sizeof(LeaderboardEntry);
+            if (count > 0)
+            {
+                LeaderboardEntry entries[100];
+                memcpy(entries, response.payload, sizeof(LeaderboardEntry) * count);
+
+                printf("%sRank  Username                    Value           Details%s\n", COLOR_CYAN, COLOR_RESET);
+                print_separator(70);
+
+                for (int i = 0; i < count; i++)
+                {
+                    const char *medal = "";
+                    if (i == 0)
+                        medal = "🥇";
+                    else if (i == 1)
+                        medal = "🥈";
+                    else if (i == 2)
+                        medal = "🥉";
+
+                    printf("%s%2d%s. %s%-28s%s %s$%10.2f%s",
+                           COLOR_BRIGHT_GREEN, i + 1, COLOR_RESET,
+                           COLOR_CYAN, entries[i].username, COLOR_RESET,
+                           COLOR_BRIGHT_GREEN, entries[i].value, COLOR_RESET);
+
+                    if (strlen(entries[i].details) > 0)
+                    {
+                        printf(" %s%s%s", COLOR_DIM, entries[i].details, COLOR_RESET);
+                    }
+                    printf(" %s\n", medal);
+                }
+            }
+            else
+            {
+                printf("No data available.\n");
+            }
+
+            printf("\nPress Enter to continue...");
+            getchar();
+        }
+        else if (response.header.msg_type == MSG_ERROR)
+        {
+            uint32_t error_code;
+            memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
+            char err_msg[128];
+            snprintf(err_msg, sizeof(err_msg), "Failed to load leaderboard (error: %u)", error_code);
+            print_error(err_msg);
+            wait_for_key();
+        }
+        else
+        {
+            print_error("Failed to load leaderboard (unexpected response)");
+            wait_for_key();
+        }
+    }
+}
+
+// Show trade analytics
+void show_trade_analytics()
+{
+    int should_exit = 0;
+    while (!should_exit)
+    {
+        clear_screen();
+        print_header("TRADE ANALYTICS");
+        display_balance_info();
+
+        printf("\nOptions:\n");
+        printf("1. Trade History\n");
+        printf("2. Trade Statistics\n");
+        printf("3. Balance History Graph\n");
+        printf("0. Back to main menu\n");
+        printf("\nSelect option: ");
+        fflush(stdout);
+
+        char choice[32];
+        if (fgets(choice, sizeof(choice), stdin) == NULL)
+        {
+            should_exit = 1;
+            break;
+        }
+
+        int option = atoi(choice);
+        if (option == 0)
+        {
+            should_exit = 1;
+            break;
+        }
+
+        if (option == 1)
+        {
+            // Trade History
+            Message request, response;
+            memset(&request, 0, sizeof(Message));
+            memset(&response, 0, sizeof(Message));
+
+            request.header.magic = 0xABCD;
+            request.header.msg_type = MSG_GET_TRADE_HISTORY;
+            snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:50", g_user_id);
+            request.header.msg_length = strlen(request.payload);
+
+            if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+            {
+                if (response.header.msg_type == MSG_TRADE_HISTORY_DATA)
+                {
+                    clear_screen();
+                    print_header("TRADE HISTORY");
+                    printf("\n");
+
+                    int count = response.header.msg_length / sizeof(TransactionLog);
+                    if (count > 0)
+                    {
+                        TransactionLog logs[100];
+                        memcpy(logs, response.payload, sizeof(TransactionLog) * count);
+
+                        for (int i = 0; i < count; i++)
+                        {
+                            const char *type_str = "";
+                            const char *type_color = COLOR_DIM;
+                            switch (logs[i].type)
+                            {
+                            case LOG_MARKET_BUY:
+                                type_str = "BUY";
+                                type_color = COLOR_BRIGHT_RED;
+                                break;
+                            case LOG_MARKET_SELL:
+                                type_str = "SELL";
+                                type_color = COLOR_BRIGHT_GREEN;
+                                break;
+                            case LOG_TRADE:
+                                type_str = "TRADE";
+                                type_color = COLOR_CYAN;
+                                break;
+                            default:
+                                type_str = "OTHER";
+                                break;
+                            }
+
+                            struct tm *timeinfo = localtime(&logs[i].timestamp);
+                            char time_str[64];
+                            strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", timeinfo);
+
+                            printf("[%s] %s%s%s: %s\n", time_str, type_color, type_str, COLOR_RESET, logs[i].details);
+                        }
+                    }
+                    else
+                    {
+                        printf("No trade history available.\n");
+                    }
+
+                    printf("\nPress Enter to continue...");
+                    getchar();
+                }
+            }
+        }
+        else if (option == 2)
+        {
+            // Trade Statistics
+            Message request, response;
+            memset(&request, 0, sizeof(Message));
+            memset(&response, 0, sizeof(Message));
+
+            request.header.magic = 0xABCD;
+            request.header.msg_type = MSG_GET_TRADE_STATS;
+            snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
+            request.header.msg_length = strlen(request.payload);
+
+            if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+            {
+                if (response.header.msg_type == MSG_TRADE_STATS_DATA)
+                {
+                    clear_screen();
+                    print_header("TRADE STATISTICS");
+                    printf("\n");
+
+                    TradeStats stats;
+                    memcpy(&stats, response.payload, sizeof(TradeStats));
+
+                    printf("Trades Completed: %s%d%s\n", COLOR_CYAN, stats.trades_completed, COLOR_RESET);
+                    printf("Items Bought: %s%d%s\n", COLOR_BRIGHT_RED, stats.items_bought, COLOR_RESET);
+                    printf("Items Sold: %s%d%s\n", COLOR_BRIGHT_GREEN, stats.items_sold, COLOR_RESET);
+                    printf("Average Buy Price: %s$%.2f%s\n", COLOR_BRIGHT_RED, stats.avg_buy_price, COLOR_RESET);
+                    printf("Average Sell Price: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, stats.avg_sell_price, COLOR_RESET);
+                    printf("Net Profit: %s$%.2f%s\n",
+                           stats.net_profit >= 0 ? COLOR_BRIGHT_GREEN : COLOR_BRIGHT_RED,
+                           stats.net_profit, COLOR_RESET);
+                    printf("Best Trade Profit: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, stats.best_trade_profit, COLOR_RESET);
+                    printf("Worst Trade Loss: %s$%.2f%s\n", COLOR_BRIGHT_RED, stats.worst_trade_loss, COLOR_RESET);
+                    printf("Win Rate: %s%.1f%%%s\n",
+                           stats.win_rate >= 50.0f ? COLOR_BRIGHT_GREEN : COLOR_BRIGHT_RED,
+                           stats.win_rate, COLOR_RESET);
+
+                    printf("\nPress Enter to continue...");
+                    getchar();
+                }
+            }
+        }
+        else if (option == 3)
+        {
+            // Balance History Graph
+            Message request, response;
+            memset(&request, 0, sizeof(Message));
+            memset(&response, 0, sizeof(Message));
+
+            request.header.magic = 0xABCD;
+            request.header.msg_type = MSG_GET_BALANCE_HISTORY;
+            snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:7", g_user_id);
+            request.header.msg_length = strlen(request.payload);
+
+            if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+            {
+                if (response.header.msg_type == MSG_BALANCE_HISTORY_DATA)
+                {
+                    clear_screen();
+                    print_header("BALANCE HISTORY (Last 7 Days)");
+                    printf("\n");
+
+                    int count = response.header.msg_length / sizeof(BalanceHistoryEntry);
+                    if (count > 0)
+                    {
+                        BalanceHistoryEntry history[30];
+                        memcpy(history, response.payload, sizeof(BalanceHistoryEntry) * count);
+
+                        // Find min and max for scaling
+                        float min_balance = history[0].balance;
+                        float max_balance = history[0].balance;
+                        for (int i = 1; i < count; i++)
+                        {
+                            if (history[i].balance < min_balance)
+                                min_balance = history[i].balance;
+                            if (history[i].balance > max_balance)
+                                max_balance = history[i].balance;
+                        }
+                        float range = max_balance - min_balance;
+                        if (range < 1.0f)
+                            range = 1.0f;
+
+                        // Simple ASCII graph
+                        int graph_width = 60;
+                        int graph_height = 15;
+
+                        printf("Balance Range: $%.2f - $%.2f\n\n", min_balance, max_balance);
+
+                        for (int row = graph_height - 1; row >= 0; row--)
+                        {
+                            float value = min_balance + (range * row / graph_height);
+                            printf("%6.0f │", value);
+
+                            for (int col = 0; col < count && col < graph_width; col++)
+                            {
+                                float normalized = (history[col].balance - min_balance) / range;
+                                int bar_height = (int)(normalized * graph_height);
+
+                                if (bar_height == row)
+                                    printf("█");
+                                else if (bar_height > row)
+                                    printf("│");
+                                else
+                                    printf(" ");
+                            }
+                            printf("\n");
+                        }
+
+                        printf("       └");
+                        for (int i = 0; i < graph_width && i < count; i++)
+                            printf("─");
+                        printf("\n");
+
+                        // Print dates
+                        printf("        ");
+                        for (int i = 0; i < count && i < 5; i++)
+                        {
+                            struct tm *timeinfo = localtime(&history[i].timestamp);
+                            char date_str[16];
+                            strftime(date_str, sizeof(date_str), "%m/%d", timeinfo);
+                            printf("%-12s", date_str);
+                        }
+                        printf("\n");
+                    }
+                    else
+                    {
+                        printf("No balance history available.\n");
+                    }
+
+                    printf("\nPress Enter to continue...");
+                    getchar();
+                }
+            }
+        }
+        else
+        {
+            print_error("Invalid option");
+            sleep(1);
+        }
+    }
+}
+
+// Show trading challenges
+void show_trading_challenges()
+{
+    int should_exit = 0;
+    TradingChallenge challenges[50];
+    int challenge_count = 0;
+
+    while (!should_exit)
+    {
+        clear_screen();
+        print_header("TRADING CHALLENGES");
+        display_balance_info();
+
+        // Get user's challenges
+        Message request, response;
+        memset(&request, 0, sizeof(Message));
+        memset(&response, 0, sizeof(Message));
+
+        request.header.magic = 0xABCD;
+        request.header.msg_type = MSG_GET_USER_CHALLENGES;
+        snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
+        request.header.msg_length = strlen(request.payload);
+
+        challenge_count = 0;
+
+        if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
+        {
+            if (response.header.msg_type == MSG_USER_CHALLENGES_DATA)
+            {
+                challenge_count = response.header.msg_length / sizeof(TradingChallenge);
+                if (challenge_count > 50)
+                    challenge_count = 50;
+                if (challenge_count > 0)
+                {
+                    memcpy(challenges, response.payload, sizeof(TradingChallenge) * challenge_count);
+                }
+            }
+        }
+
+        if (challenge_count > 0)
+        {
+            printf("\n%sActive Challenges:%s\n", COLOR_CYAN, COLOR_RESET);
+            print_separator(70);
+
+            for (int i = 0; i < challenge_count; i++)
+            {
+                const char *status_str = "";
+                const char *status_color = COLOR_DIM;
+                switch (challenges[i].status)
+                {
+                case 0: // PENDING
+                    status_str = "PENDING";
+                    status_color = COLOR_YELLOW;
+                    break;
+                case 1: // ACTIVE
+                    status_str = "ACTIVE";
+                    status_color = COLOR_BRIGHT_GREEN;
+                    break;
+                case 2: // COMPLETED
+                    status_str = "COMPLETED";
+                    status_color = COLOR_CYAN;
+                    break;
+                case 3: // CANCELLED
+                    status_str = "CANCELLED";
+                    status_color = COLOR_BRIGHT_RED;
+                    break;
+                }
+
+                // Get challenger and opponent usernames via API
+                char challenger_name[32] = "User";
+                char opponent_name[32] = "User";
+
+                Message req1, resp1, req2, resp2;
+                memset(&req1, 0, sizeof(Message));
+                memset(&resp1, 0, sizeof(Message));
+                memset(&req2, 0, sizeof(Message));
+                memset(&resp2, 0, sizeof(Message));
+
+                req1.header.magic = 0xABCD;
+                req1.header.msg_type = MSG_GET_USER_PROFILE;
+                snprintf(req1.payload, MAX_PAYLOAD_SIZE, "%d", challenges[i].challenger_id);
+                req1.header.msg_length = strlen(req1.payload);
+
+                req2.header.magic = 0xABCD;
+                req2.header.msg_type = MSG_GET_USER_PROFILE;
+                snprintf(req2.payload, MAX_PAYLOAD_SIZE, "%d", challenges[i].opponent_id);
+                req2.header.msg_length = strlen(req2.payload);
+
+                if (send_message_to_server(&req1) == 0 && receive_message_from_server(&resp1) == 0)
+                {
+                    if (resp1.header.msg_type == MSG_USER_PROFILE_DATA)
+                    {
+                        User u;
+                        memcpy(&u, resp1.payload, sizeof(User));
+                        strncpy(challenger_name, u.username, 31);
+                    }
+                }
+
+                if (send_message_to_server(&req2) == 0 && receive_message_from_server(&resp2) == 0)
+                {
+                    if (resp2.header.msg_type == MSG_USER_PROFILE_DATA)
+                    {
+                        User u;
+                        memcpy(&u, resp2.payload, sizeof(User));
+                        strncpy(opponent_name, u.username, 31);
+                    }
+                }
+
+                printf("Challenge #%d: %s vs %s [%s%s%s]\n",
+                       challenges[i].challenge_id,
+                       challenger_name, opponent_name,
+                       status_color, status_str, COLOR_RESET);
+                
+                // Determine which profit is "yours" vs "opponent"
+                float your_profit, opponent_profit;
+                if (challenges[i].challenger_id == g_user_id)
+                {
+                    your_profit = challenges[i].challenger_current_profit;
+                    opponent_profit = challenges[i].opponent_current_profit;
+                }
+                else
+                {
+                    your_profit = challenges[i].opponent_current_profit;
+                    opponent_profit = challenges[i].challenger_current_profit;
+                }
+                
+                printf("  Your Profit: %s$%.2f%s | Opponent Profit: %s$%.2f%s\n",
+                       COLOR_BRIGHT_GREEN, your_profit, COLOR_RESET,
+                       COLOR_BRIGHT_RED, opponent_profit, COLOR_RESET);
+                printf("  Duration: %d minutes\n", challenges[i].duration_minutes);
+                
+                // Display timer countdown for active challenges
+                if (challenges[i].status == CHALLENGE_ACTIVE && challenges[i].start_time > 0)
+                {
+                    time_t now = time(NULL);
+                    time_t elapsed = now - challenges[i].start_time;
+                    int total_seconds = challenges[i].duration_minutes * 60;
+                    int remaining_seconds = total_seconds - (int)elapsed;
+                    
+                    if (remaining_seconds > 0)
+                    {
+                        int minutes = remaining_seconds / 60;
+                        int seconds = remaining_seconds % 60;
+                        printf("  Timer: %s%02d:%02d remaining%s\n", 
+                               COLOR_YELLOW, minutes, seconds, COLOR_RESET);
+                    }
+                    else
+                    {
+                        printf("  Timer: %sEXPIRED%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
+                    }
+                }
+            }
+        }
+        else
+        {
+            printf("\nNo active challenges.\n");
+        }
+
+        printf("\nOptions:\n");
+        printf("1. Create Challenge\n");
+        printf("2. Accept Challenge\n");
+        printf("3. Update Progress\n");
+        printf("4. Complete Challenge\n");
+        printf("5. Cancel Challenge\n");
+        printf("0. Back to main menu\n");
+        printf("\nSelect option: ");
+        fflush(stdout);
+
+        char choice[32];
+        if (fgets(choice, sizeof(choice), stdin) == NULL)
+        {
+            should_exit = 1;
+            break;
+        }
+
+        int option = atoi(choice);
+        if (option == 0)
+        {
+            should_exit = 1;
+            break;
+        }
+        else if (option == 1)
+        {
+            // Create challenge
+            printf("Enter opponent username: ");
+            fflush(stdout);
+            char username[32];
+            if (fgets(username, sizeof(username), stdin) != NULL)
+            {
+                size_t len = strlen(username);
+                if (len > 0 && username[len - 1] == '\n')
+                    username[len - 1] = '\0';
+
+                User opponent;
+                if (search_user_by_username(username, &opponent) == 0)
+                {
+                    printf("Enter duration (minutes): ");
+                    fflush(stdout);
+                    char duration_str[32];
+                    if (fgets(duration_str, sizeof(duration_str), stdin) != NULL)
+                    {
+                        int duration = atoi(duration_str);
+                        if (duration > 0)
+                        {
+                            Message req, resp;
+                            memset(&req, 0, sizeof(Message));
+                            memset(&resp, 0, sizeof(Message));
+
+                            req.header.magic = 0xABCD;
+                            req.header.msg_type = MSG_CREATE_CHALLENGE;
+                            snprintf(req.payload, MAX_PAYLOAD_SIZE, "%d:%d:%d", g_user_id, opponent.user_id, duration);
+                            req.header.msg_length = strlen(req.payload);
+
+                            if (send_message_to_server(&req) == 0 && receive_message_from_server(&resp) == 0)
+                            {
+                                if (resp.header.msg_type == MSG_CREATE_CHALLENGE_RESPONSE)
+                                {
+                                    int challenge_id = 0;
+                                    memcpy(&challenge_id, resp.payload, sizeof(int));
+                                    char msg[128];
+                                    snprintf(msg, sizeof(msg), "Challenge created! ID: %d", challenge_id);
+                                    print_success(msg);
+                                }
+                                else
+                                {
+                                    print_error("Failed to create challenge");
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    print_error("User not found");
+                }
+            }
+            wait_for_key();
+        }
+        else if (option == 2)
+        {
+            // Accept Challenge
+            if (challenge_count == 0)
+            {
+                print_error("No challenges available");
+                wait_for_key();
+                continue;
+            }
+            
+            printf("\nEnter challenge ID to accept: ");
+            fflush(stdout);
+            char challenge_id_str[32];
+            if (fgets(challenge_id_str, sizeof(challenge_id_str), stdin) != NULL)
+            {
+                int challenge_id = atoi(challenge_id_str);
+                
+                Message req, resp;
+                memset(&req, 0, sizeof(Message));
+                memset(&resp, 0, sizeof(Message));
+                
+                req.header.magic = 0xABCD;
+                req.header.msg_type = MSG_ACCEPT_CHALLENGE;
+                snprintf(req.payload, MAX_PAYLOAD_SIZE, "%d:%d", challenge_id, g_user_id);
+                req.header.msg_length = strlen(req.payload);
+                
+                if (send_message_to_server(&req) == 0 && receive_message_from_server(&resp) == 0)
+                {
+                    if (resp.header.msg_type == MSG_ACCEPT_CHALLENGE_RESPONSE)
+                    {
+                        print_success("Challenge accepted!");
+                    }
+                    else if (resp.header.msg_type == MSG_ERROR)
+                    {
+                        uint32_t error_code;
+                        memcpy(&error_code, resp.payload + sizeof(uint16_t), sizeof(uint32_t));
+                        if (error_code == ERR_PERMISSION_DENIED)
+                            print_error("You are not authorized to accept this challenge");
+                        else if (error_code == ERR_INVALID_REQUEST)
+                            print_error("Challenge is not pending or not found");
+                        else
+                            print_error("Failed to accept challenge");
+                    }
+                }
+            }
+            wait_for_key();
+        }
+        else if (option == 3)
+        {
+            // Update Progress
+            if (challenge_count == 0)
+            {
+                print_error("No challenges available");
+            wait_for_key();
+                continue;
+            }
+            
+            printf("\nEnter challenge ID to update: ");
+            fflush(stdout);
+            char challenge_id_str[32];
+            if (fgets(challenge_id_str, sizeof(challenge_id_str), stdin) != NULL)
+            {
+                int challenge_id = atoi(challenge_id_str);
+                
+                Message req, resp;
+                memset(&req, 0, sizeof(Message));
+                memset(&resp, 0, sizeof(Message));
+                
+                req.header.magic = 0xABCD;
+                req.header.msg_type = MSG_UPDATE_CHALLENGE_PROGRESS;
+                snprintf(req.payload, MAX_PAYLOAD_SIZE, "%d", challenge_id);
+                req.header.msg_length = strlen(req.payload);
+                
+                if (send_message_to_server(&req) == 0 && receive_message_from_server(&resp) == 0)
+                {
+                    if (resp.header.msg_type == MSG_UPDATE_CHALLENGE_PROGRESS_RESPONSE)
+                    {
+                        TradingChallenge updated_challenge;
+                        memcpy(&updated_challenge, resp.payload, sizeof(TradingChallenge));
+                        
+                        float your_profit, opponent_profit;
+                        if (updated_challenge.challenger_id == g_user_id)
+                        {
+                            your_profit = updated_challenge.challenger_current_profit;
+                            opponent_profit = updated_challenge.opponent_current_profit;
+                        }
+                        else
+                        {
+                            your_profit = updated_challenge.opponent_current_profit;
+                            opponent_profit = updated_challenge.challenger_current_profit;
+                        }
+                        
+                        printf("\n%sProgress Updated:%s\n", COLOR_CYAN, COLOR_RESET);
+                        printf("Your Profit: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, your_profit, COLOR_RESET);
+                        printf("Opponent Profit: %s$%.2f%s\n", COLOR_BRIGHT_RED, opponent_profit, COLOR_RESET);
+                        
+                        if (your_profit > opponent_profit)
+                            printf("%sYou are winning!%s\n", COLOR_BRIGHT_GREEN, COLOR_RESET);
+                        else if (opponent_profit > your_profit)
+                            printf("%sYou are losing! Trade smarter!%s\n", COLOR_BRIGHT_RED, COLOR_RESET);
+                        else
+                            printf("%sTied!%s\n", COLOR_YELLOW, COLOR_RESET);
+                    }
+                    else
+                    {
+                        print_error("Failed to update challenge progress");
+                    }
+                }
+            }
+            wait_for_key();
+        }
+        else if (option == 4)
+        {
+            // Complete Challenge
+            if (challenge_count == 0)
+            {
+                print_error("No challenges available");
+                wait_for_key();
+                continue;
+            }
+            
+            printf("\nEnter challenge ID to complete: ");
+            fflush(stdout);
+            char challenge_id_str[32];
+            if (fgets(challenge_id_str, sizeof(challenge_id_str), stdin) != NULL)
+            {
+                int challenge_id = atoi(challenge_id_str);
+                
+                Message req, resp;
+                memset(&req, 0, sizeof(Message));
+                memset(&resp, 0, sizeof(Message));
+                
+                req.header.magic = 0xABCD;
+                req.header.msg_type = MSG_COMPLETE_CHALLENGE;
+                snprintf(req.payload, MAX_PAYLOAD_SIZE, "%d", challenge_id);
+                req.header.msg_length = strlen(req.payload);
+                
+                if (send_message_to_server(&req) == 0 && receive_message_from_server(&resp) == 0)
+                {
+                    if (resp.header.msg_type == MSG_COMPLETE_CHALLENGE_RESPONSE)
+                    {
+                        int winner_id = 0;
+                        memcpy(&winner_id, resp.payload, sizeof(int));
+                        
+                        if (winner_id == 0)
+                        {
+                            print_success("Challenge completed! It's a tie!");
+                        }
+                        else if (winner_id == g_user_id)
+                        {
+                            print_success("Challenge completed! You won!");
+                        }
+                        else
+                        {
+                            print_error("Challenge completed! You lost!");
+                        }
+                    }
+                    else
+                    {
+                        print_error("Failed to complete challenge");
+                    }
+                }
+            }
+            wait_for_key();
+        }
+        else if (option == 5)
+        {
+            // Cancel Challenge
+            if (challenge_count == 0)
+            {
+                print_error("No challenges available");
+                wait_for_key();
+                continue;
+            }
+            
+            printf("\nEnter challenge ID to cancel: ");
+            fflush(stdout);
+            char challenge_id_str[32];
+            if (fgets(challenge_id_str, sizeof(challenge_id_str), stdin) != NULL)
+            {
+                int challenge_id = atoi(challenge_id_str);
+                
+                Message req, resp;
+                memset(&req, 0, sizeof(Message));
+                memset(&resp, 0, sizeof(Message));
+                
+                req.header.magic = 0xABCD;
+                req.header.msg_type = MSG_CANCEL_CHALLENGE;
+                snprintf(req.payload, MAX_PAYLOAD_SIZE, "%d:%d", challenge_id, g_user_id);
+                req.header.msg_length = strlen(req.payload);
+                
+                if (send_message_to_server(&req) == 0 && receive_message_from_server(&resp) == 0)
+                {
+                    if (resp.header.msg_type == MSG_CANCEL_CHALLENGE_RESPONSE)
+                    {
+                        print_success("Challenge cancelled");
+                    }
+                    else if (resp.header.msg_type == MSG_ERROR)
+                    {
+                        uint32_t error_code;
+                        memcpy(&error_code, resp.payload + sizeof(uint16_t), sizeof(uint32_t));
+                        if (error_code == ERR_PERMISSION_DENIED)
+                            print_error("You are not authorized to cancel this challenge");
+                        else if (error_code == ERR_INVALID_REQUEST)
+                            print_error("Cannot cancel completed challenge");
+                        else
+                            print_error("Failed to cancel challenge");
+                    }
+                }
+            }
+            wait_for_key();
+        }
+        else
+        {
+            print_error("Invalid option");
+            wait_for_key();
+        }
+    }
 }
 
 void show_profile()
@@ -2164,6 +3264,15 @@ int main(int argc, char *argv[])
                 show_chat();
                 break;
             case 9:
+                show_leaderboards();
+                break;
+            case 10:
+                show_trade_analytics();
+                break;
+            case 11:
+                show_trading_challenges();
+                break;
+            case 12:
             {
                 // Logout: send logout message and return to authenticate
                 Message request, response;
@@ -2185,7 +3294,7 @@ int main(int argc, char *argv[])
                 running = 0;
                 break;
             }
-            case 10:
+            case 13:
                 // Exit: set flag to exit completely
                 should_exit = 1;
                 running = 0;

@@ -2,6 +2,7 @@
 
 #include "../include/database.h"
 #include "../include/types.h"
+#include "../include/price_tracking.h"
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +17,12 @@ static void db_populate_cases_and_skins();
 // Populate database with real CS2 cases and skins
 static void db_populate_cases_and_skins()
 {
+    if (!db)
+    {
+        fprintf(stderr, "db_populate_cases_and_skins: db is NULL\n");
+        return;
+    }
+
     char *err_msg = 0;
 
     // Insert cases with real CS2 prices (USD)
@@ -60,8 +67,8 @@ static void db_populate_cases_and_skins()
         "(19, 'M4A1-S | Hyper Beast', 150.0, 5), "      // ~$150 Covert FN (popular)
         "(20, 'AWP | Asiimov', 300.0, 5), "             // ~$300 Covert FN (iconic, expensive)
         // Operation Phoenix Case skins (legendary, very expensive) - All Covert
-        "(21, 'AK-47 | Redline', 180.0, 5), "            // ~$180 Covert FN
-        "(22, 'AWP | Redline', 200.0, 5), "              // ~$200 Covert FN
+        "(21, 'AK-47 | Case Hardened', 250.0, 5), "      // ~$250 Covert FN (Phoenix exclusive)
+        "(22, 'AWP | Lightning Strike', 280.0, 5), "     // ~$280 Covert FN (Phoenix exclusive)
         "(23, 'M4A4 | X-Ray', 85.0, 5), "                // ~$85 Covert FN
         "(24, 'Glock-18 | Steel Disruption', 50.0, 5), " // ~$50 Covert FN
         "(25, 'USP-S | Caiman', 60.0, 5), "              // ~$60 Covert FN
@@ -77,18 +84,18 @@ static void db_populate_cases_and_skins()
         "(34, 'Glock-18 | Grinder', 45.0, 5), "          // ~$45 Covert FN
         "(35, 'USP-S | Kill Confirmed', 100.0, 5), "     // ~$100 Covert FN (popular)
         "(36, 'Desert Eagle | Sunset Storm', 65.0, 5), " // ~$65 Covert FN
-        "(37, 'AWP | Hyper Beast', 150.0, 5), "          // ~$150 Covert FN
+        "(37, 'AWP | Fever Dream', 150.0, 5), "          // ~$150 Covert FN (Chroma 2 exclusive)
         "(38, 'AK-47 | Wasteland Rebel', 160.0, 5), "    // ~$160 Covert FN
         "(39, 'M4A1-S | Master Piece', 200.0, 5), "      // ~$200 Covert FN
         "(40, 'AWP | Medusa', 5000.0, 5), "              // ~$5000 Covert FN (very expensive)
         // Falchion Case skins - All Covert
         "(41, 'AK-47 | Aquamarine Revenge', 130.0, 5), "   // ~$130 Covert FN
-        "(42, 'AWP | Hyper Beast', 150.0, 5), "            // ~$150 Covert FN
+        "(42, 'AWP | Pit Viper', 150.0, 5), "              // ~$150 Covert FN (Falchion exclusive)
         "(43, 'M4A4 | Royal Paladin', 75.0, 5), "          // ~$75 Covert FN
         "(44, 'Glock-18 | Twilight Galaxy', 50.0, 5), "    // ~$50 Covert FN
-        "(45, 'USP-S | Kill Confirmed', 100.0, 5), "       // ~$100 Covert FN
+        "(45, 'USP-S | Neo-Noir', 100.0, 5), "             // ~$100 Covert FN (Falchion exclusive)
         "(46, 'Desert Eagle | Kumicho Dragon', 85.0, 5), " // ~$85 Covert FN
-        "(47, 'AWP | Hyper Beast', 150.0, 5), "            // ~$150 Covert FN
+        "(47, 'AWP | Phobos', 150.0, 5), "                 // ~$150 Covert FN (Falchion exclusive)
         "(48, 'AK-47 | Fuel Injector', 110.0, 5), "        // ~$110 Covert FN
         "(49, 'M4A1-S | Icarus Fell', 120.0, 5), "         // ~$120 Covert FN
         "(50, 'AWP | Oni Taiji', 180.0, 5), "              // ~$180 Covert FN
@@ -126,23 +133,23 @@ static void db_populate_cases_and_skins()
         "(80, 'Moto Gloves | Cool Mint', 800.0, 6), "            // ~$800 Contraband FN
         // Additional skins with different rarities for testing (Mil-Spec, Restricted, Classified)
         // Mil-Spec (RARITY_MIL_SPEC = 2) - 79.92% drop rate
-        "(81, 'AK-47 | Blue Laminate', 15.0, 2), "              // ~$15 Mil-Spec FN
-        "(82, 'AWP | Worm God', 20.0, 2), "                     // ~$20 Mil-Spec FN
-        "(83, 'M4A4 | Desert-Strike', 12.0, 2), "              // ~$12 Mil-Spec FN
-        "(84, 'Glock-18 | Steel Disruption', 8.0, 2), "        // ~$8 Mil-Spec FN
-        "(85, 'USP-S | Forest Leaves', 10.0, 2), "             // ~$10 Mil-Spec FN
+        "(81, 'AK-47 | Blue Laminate', 15.0, 2), " // ~$15 Mil-Spec FN
+        "(82, 'AWP | Worm God', 20.0, 2), "        // ~$20 Mil-Spec FN
+        "(83, 'M4A4 | Desert-Strike', 12.0, 2), "  // ~$12 Mil-Spec FN
+        "(84, 'Glock-18 | Blue Steel', 8.0, 2), "  // ~$8 Mil-Spec FN
+        "(85, 'USP-S | Forest Leaves', 10.0, 2), " // ~$10 Mil-Spec FN
         // Restricted (RARITY_RESTRICTED = 3) - 15.98% drop rate
-        "(86, 'AK-47 | Emerald Pinstripe', 35.0, 3), "         // ~$35 Restricted FN
-        "(87, 'AWP | Corticera', 40.0, 3), "                   // ~$40 Restricted FN
-        "(88, 'M4A4 | X-Ray', 30.0, 3), "                      // ~$30 Restricted FN
-        "(89, 'Glock-18 | Water Elemental', 25.0, 3), "        // ~$25 Restricted FN
-        "(90, 'USP-S | Guardian', 28.0, 3), "                  // ~$28 Restricted FN
+        "(86, 'AK-47 | Emerald Pinstripe', 35.0, 3), "     // ~$35 Restricted FN
+        "(87, 'AWP | Corticera', 40.0, 3), "               // ~$40 Restricted FN
+        "(88, 'M4A4 | X-Ray FT', 30.0, 3), "               // ~$30 Restricted FN (renamed to avoid duplicate)
+        "(89, 'Glock-18 | Water Elemental FT', 25.0, 3), " // ~$25 Restricted FN (renamed to avoid duplicate)
+        "(90, 'USP-S | Guardian FT', 28.0, 3), "           // ~$28 Restricted FN (renamed to avoid duplicate)
         // Classified (RARITY_CLASSIFIED = 4) - 3.2% drop rate
-        "(91, 'AK-47 | Jaguar', 80.0, 4), "                     // ~$80 Classified FN
-        "(92, 'AWP | Hyper Beast', 90.0, 4), "                  // ~$90 Classified FN
-        "(93, 'M4A4 | Bullet Rain', 70.0, 4), "                // ~$70 Classified FN
-        "(94, 'Glock-18 | Grinder', 50.0, 4), "                // ~$50 Classified FN
-        "(95, 'USP-S | Kill Confirmed', 60.0, 4);";            // ~$60 Classified FN
+        "(91, 'AK-47 | Jaguar CL', 80.0, 4), "         // ~$80 Classified FN (renamed to avoid duplicate)
+        "(92, 'AWP | Hyper Beast CL', 90.0, 4), "      // ~$90 Classified FN (renamed to avoid duplicate)
+        "(93, 'M4A4 | Bullet Rain CL', 70.0, 4), "     // ~$70 Classified FN (renamed to avoid duplicate)
+        "(94, 'Glock-18 | Grinder CL', 50.0, 4), "     // ~$50 Classified FN (renamed to avoid duplicate)
+        "(95, 'USP-S | Kill Confirmed CL', 60.0, 4);"; // ~$60 Classified FN (renamed to avoid duplicate)
     sqlite3_exec(db, skins_sql, 0, 0, &err_msg);
     if (err_msg)
     {
@@ -163,13 +170,18 @@ static void db_populate_cases_and_skins()
         // Covert (5) - Original weapons
         "(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), "
         // Contraband (6) - Knives and Gloves
-        "(1, 51), (1, 54), "                                                                // Karambit Fade, Butterfly Fade
-        "(1, 71), (1, 75);";                                                                // Specialist Fade, Sport Pandora
-    sqlite3_exec(db, case1_sql, 0, 0, &err_msg);
+        "(1, 51), (1, 54), " // Karambit Fade, Butterfly Fade
+        "(1, 71), (1, 75);"; // Specialist Fade, Sport Pandora
+    int rc1 = sqlite3_exec(db, case1_sql, 0, 0, &err_msg);
     if (err_msg)
     {
+        fprintf(stderr, "case1_sql error: %s\n", err_msg);
         sqlite3_free(err_msg);
         err_msg = 0;
+    }
+    if (rc1 != SQLITE_OK)
+    {
+        fprintf(stderr, "case1_sql exec failed: %d\n", rc1);
     }
 
     // Chroma Case - Real CS2 case with all rarities
@@ -185,8 +197,8 @@ static void db_populate_cases_and_skins()
         // Covert (5) - 0.64% drop rate
         "(2, 11), (2, 12), (2, 13), (2, 14), (2, 15), (2, 16), (2, 17), (2, 18), (2, 19), (2, 20), "
         // Contraband (6) - 0.26% drop rate
-        "(2, 52), (2, 56), "                                                                         // Karambit Doppler, M9 Bayonet Fade
-        "(2, 72), (2, 76);";                                                                         // Specialist Crimson Kimono, Sport Vice
+        "(2, 52), (2, 56), " // Karambit Doppler, M9 Bayonet Fade
+        "(2, 72), (2, 76);"; // Specialist Crimson Kimono, Sport Vice
     sqlite3_exec(db, case2_sql, 0, 0, &err_msg);
     if (err_msg)
     {
@@ -206,9 +218,10 @@ static void db_populate_cases_and_skins()
         "(3, 91), (3, 92), (3, 93), (3, 94), (3, 95), "
         // Covert (5) - 0.64% drop rate
         "(3, 21), (3, 22), (3, 23), (3, 24), (3, 25), (3, 26), (3, 27), (3, 28), (3, 29), (3, 30), "
+        // Note: definition_id 30 exists (AWP | Dragon Lore)
         // Contraband (6) - 0.26% drop rate
-        "(3, 53), (3, 57), "                                                                         // Karambit Tiger Tooth, M9 Bayonet Doppler
-        "(3, 73), (3, 77);";                                                                         // Hand Wraps Slaughter, Driver King Snake
+        "(3, 55), (3, 59), " // Karambit Doppler, Bayonet Fade
+        "(3, 62), (3, 65);"; // Huntsman Fade, Falchion Doppler
     sqlite3_exec(db, case3_sql, 0, 0, &err_msg);
     if (err_msg)
     {
@@ -227,10 +240,11 @@ static void db_populate_cases_and_skins()
         // Classified (4) - 3.2% drop rate
         "(4, 91), (4, 92), (4, 93), (4, 94), (4, 95), "
         // Covert (5) - 0.64% drop rate
-        "(4, 31), (4, 32), (4, 33), (4, 34), (4, 35), (4, 36), (4, 37), (4, 38), (4, 39), (4, 40), "
+        "(4, 31), (4, 32), (4, 33), (4, 34), (4, 35), (4, 36), (4, 38), (4, 39), (4, 40), "
+        // Note: definition_id 37 (AWP | Hyper Beast) is duplicate name, use 32 instead
         // Contraband (6) - 0.26% drop rate
-        "(4, 58), (4, 60), "                                                                         // Bayonet Fade, Talon Fade
-        "(4, 74), (4, 78);";                                                                         // Hand Wraps Cobalt Skulls, Driver Crimson Weave
+        "(4, 58), (4, 60), " // Bayonet Fade, Talon Fade
+        "(4, 74), (4, 78);"; // Hand Wraps Cobalt Skulls, Driver Crimson Weave
     sqlite3_exec(db, case4_sql, 0, 0, &err_msg);
     if (err_msg)
     {
@@ -249,16 +263,23 @@ static void db_populate_cases_and_skins()
         // Classified (4) - 3.2% drop rate
         "(5, 91), (5, 92), (5, 93), (5, 94), (5, 95), "
         // Covert (5) - 0.64% drop rate
-        "(5, 41), (5, 42), (5, 43), (5, 44), (5, 45), (5, 46), (5, 47), (5, 48), (5, 49), (5, 50), "
+        "(5, 41), (5, 43), (5, 44), (5, 45), (5, 46), (5, 48), (5, 49), (5, 50), "
+        // Note: definition_id 42 (AWP | Hyper Beast) and 47 (AWP | Hyper Beast) are duplicates, use others
         // Contraband (6) - 0.26% drop rate
-        "(5, 64), (5, 66), "                                                                         // Falchion Fade, Gut Fade
-        "(5, 79), (5, 80);";                                                                         // Moto Spearmint, Moto Cool Mint
+        "(5, 61), (5, 63), " // Talon Doppler, Huntsman Doppler
+        "(5, 67), (5, 68);"; // Gut Doppler, Shadow Daggers Fade
     sqlite3_exec(db, case5_sql, 0, 0, &err_msg);
     if (err_msg)
     {
         sqlite3_free(err_msg);
         err_msg = 0;
     }
+}
+
+// Get database connection (for internal use)
+sqlite3 *db_get_connection()
+{
+    return db;
 }
 
 // Initialize database
@@ -277,6 +298,9 @@ int db_init()
         sqlite3_close(db);
         return -1;
     }
+
+    // Enable foreign key constraints
+    sqlite3_exec(db, "PRAGMA foreign_keys = ON;", 0, 0, 0);
 
     // Create schema if tables don't exist
     const char *schema_sql =
@@ -306,10 +330,10 @@ int db_init()
         "CREATE TABLE IF NOT EXISTS inventories ("
         "inventory_id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "user_id INTEGER NOT NULL, "
-        "skin_id INTEGER NOT NULL, "
+        "instance_id INTEGER NOT NULL, "
         "FOREIGN KEY (user_id) REFERENCES users(user_id), "
-        "FOREIGN KEY (skin_id) REFERENCES skins(skin_id), "
-        "UNIQUE(user_id, skin_id)"
+        "FOREIGN KEY (instance_id) REFERENCES skin_instances(instance_id), "
+        "UNIQUE(user_id, instance_id)"
         ");"
         "CREATE TABLE IF NOT EXISTS trades ("
         "trade_id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -455,9 +479,38 @@ int db_init()
         "timestamp INTEGER NOT NULL, "
         "FOREIGN KEY (user_id) REFERENCES users(user_id)"
         ");"
+        "CREATE TABLE IF NOT EXISTS price_history ("
+        "history_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "definition_id INTEGER NOT NULL, "
+        "price REAL NOT NULL, "
+        "transaction_type INTEGER NOT NULL, "
+        "timestamp INTEGER NOT NULL, "
+        "FOREIGN KEY (definition_id) REFERENCES skin_definitions(definition_id)"
+        ");"
+        "CREATE TABLE IF NOT EXISTS trading_challenges ("
+        "challenge_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "challenger_id INTEGER NOT NULL, "
+        "opponent_id INTEGER NOT NULL, "
+        "type INTEGER NOT NULL, "
+        "status INTEGER NOT NULL, "
+        "challenger_start_balance REAL NOT NULL, "
+        "opponent_start_balance REAL NOT NULL, "
+        "challenger_current_profit REAL NOT NULL DEFAULT 0.0, "
+        "opponent_current_profit REAL NOT NULL DEFAULT 0.0, "
+        "start_time INTEGER, "
+        "end_time INTEGER, "
+        "duration_minutes INTEGER NOT NULL, "
+        "FOREIGN KEY (challenger_id) REFERENCES users(user_id), "
+        "FOREIGN KEY (opponent_id) REFERENCES users(user_id)"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_price_history_definition ON price_history(definition_id, timestamp);"
+        "CREATE INDEX IF NOT EXISTS idx_price_history_timestamp ON price_history(timestamp);"
+        "CREATE INDEX IF NOT EXISTS idx_challenges_challenger ON trading_challenges(challenger_id);"
+        "CREATE INDEX IF NOT EXISTS idx_challenges_opponent ON trading_challenges(opponent_id);"
+        "CREATE INDEX IF NOT EXISTS idx_challenges_status ON trading_challenges(status);"
         "CREATE INDEX IF NOT EXISTS idx_skins_owner ON skins(owner_id);"
         "CREATE INDEX IF NOT EXISTS idx_inventories_user ON inventories(user_id);"
-        "CREATE INDEX IF NOT EXISTS idx_inventories_skin ON inventories(skin_id);"
+        "CREATE INDEX IF NOT EXISTS idx_inventories_instance ON inventories(instance_id);"
         "CREATE INDEX IF NOT EXISTS idx_trades_from ON trades(from_user_id);"
         "CREATE INDEX IF NOT EXISTS idx_trades_to ON trades(to_user_id);"
         "CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);"
@@ -481,7 +534,9 @@ int db_init()
         "CREATE INDEX IF NOT EXISTS idx_skin_definitions_name ON skin_definitions(name);"
         "CREATE INDEX IF NOT EXISTS idx_quests_user ON quests(user_id, is_completed, is_claimed);"
         "CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements(user_id, is_unlocked, is_claimed);"
-        "CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp);";
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp);"
+        "CREATE INDEX IF NOT EXISTS idx_price_history_definition ON price_history(definition_id, timestamp);"
+        "CREATE INDEX IF NOT EXISTS idx_price_history_timestamp ON price_history(timestamp);";
 
     rc = sqlite3_exec(db, schema_sql, 0, 0, &err_msg);
     if (rc != SQLITE_OK)
@@ -495,38 +550,60 @@ int db_init()
     // Insert initial data if tables are empty
     sqlite3_stmt *stmt;
     rc = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM wear_multipliers", -1, &stmt, 0);
+    int should_populate = 0;
     if (rc == SQLITE_OK)
     {
         if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == 0)
         {
-            sqlite3_finalize(stmt);
-            const char *init_sql =
-                "INSERT OR IGNORE INTO wear_multipliers (wear_min, wear_max, multiplier) VALUES "
-                "(0.00, 0.07, 1.00), " // Factory New (FN)
-                "(0.07, 0.15, 0.92), " // Minimal Wear (MW)
-                "(0.15, 0.37, 0.78), " // Field-Tested (FT) - fixed: 0.37 not 0.38
-                "(0.37, 0.45, 0.65), " // Well-Worn (WW)
-                "(0.45, 1.00, 0.52); " // Battle-Scarred (BS)
-                "INSERT OR IGNORE INTO rarity_multipliers (rarity, multiplier, drop_rate) VALUES "
-                "(0, 0.1, 0.0), "   // Consumer - không drop từ case
-                "(1, 0.15, 0.0), "  // Industrial - không drop từ case
-                "(2, 0.3, 79.92), " // Mil-Spec (Purple) - 79.92% - giá thấp nhất
-                "(3, 0.5, 15.98), " // Restricted (Pink) - 15.98% - giá trung bình
-                "(4, 0.75, 3.2), "  // Classified (Pink) - 3.2% - giá cao
-                "(5, 1.0, 0.64), "  // Covert (Red) - 0.64% - giá rất cao (base price)
-                "(6, 1.5, 0.26);";  // Contraband (Gold) - 0.26% - giá cao nhất
-            sqlite3_exec(db, init_sql, 0, 0, &err_msg);
-            if (err_msg)
-            {
-                fprintf(stderr, "Init data error: %s\n", err_msg);
-                sqlite3_free(err_msg);
-            }
-
-            // Populate with real CS2 cases and skins
-            db_populate_cases_and_skins();
+            should_populate = 1;
         }
-        else
+        sqlite3_finalize(stmt);
+    }
+
+    if (should_populate)
+    {
+        const char *init_sql =
+            "INSERT OR IGNORE INTO wear_multipliers (wear_min, wear_max, multiplier) VALUES "
+            "(0.00, 0.07, 1.00), " // Factory New (FN)
+            "(0.07, 0.15, 0.92), " // Minimal Wear (MW)
+            "(0.15, 0.37, 0.78), " // Field-Tested (FT) - fixed: 0.37 not 0.38
+            "(0.37, 0.45, 0.65), " // Well-Worn (WW)
+            "(0.45, 1.00, 0.52); " // Battle-Scarred (BS)
+            "INSERT OR IGNORE INTO rarity_multipliers (rarity, multiplier, drop_rate) VALUES "
+            "(0, 0.1, 0.0), "   // Consumer - không drop từ case
+            "(1, 0.15, 0.0), "  // Industrial - không drop từ case
+            "(2, 0.3, 79.92), " // Mil-Spec (Purple) - 79.92% - giá thấp nhất
+            "(3, 0.5, 15.98), " // Restricted (Pink) - 15.98% - giá trung bình
+            "(4, 0.75, 3.2), "  // Classified (Pink) - 3.2% - giá cao
+            "(5, 1.0, 0.64), "  // Covert (Red) - 0.64% - giá rất cao (base price)
+            "(6, 1.5, 0.26);";  // Contraband (Gold) - 0.26% - giá cao nhất
+        sqlite3_exec(db, init_sql, 0, 0, &err_msg);
+        if (err_msg)
         {
+            fprintf(stderr, "Init data error: %s\n", err_msg);
+            sqlite3_free(err_msg);
+        }
+
+        // Populate with real CS2 cases and skins
+        db_populate_cases_and_skins();
+    }
+
+    // Always check if case_skins needs population (even if wear_multipliers is already populated)
+    // Check each case individually to ensure all cases are populated
+    for (int case_id = 1; case_id <= 5; case_id++)
+    {
+        char check_sql[128];
+        snprintf(check_sql, sizeof(check_sql), "SELECT COUNT(*) FROM case_skins WHERE case_id = %d", case_id);
+        rc = sqlite3_prepare_v2(db, check_sql, -1, &stmt, 0);
+        if (rc == SQLITE_OK)
+        {
+            if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == 0)
+            {
+                sqlite3_finalize(stmt);
+                // Populate all cases if any case is missing
+                db_populate_cases_and_skins();
+                break; // Only need to populate once
+            }
             sqlite3_finalize(stmt);
         }
     }
@@ -548,6 +625,9 @@ void db_close()
 int db_save_user(User *user)
 {
     if (!user)
+        return -1;
+
+    if (!db)
         return -1;
 
     // If user_id is 0, let SQLite AUTOINCREMENT assign it
@@ -581,13 +661,13 @@ int db_save_user(User *user)
     sqlite3_bind_int(stmt, bind_idx++, user->is_banned);
 
     rc = sqlite3_step(stmt);
-    
+
     // If user_id was 0, get the assigned ID from SQLite
     if (user->user_id == 0 && rc == SQLITE_DONE)
     {
         user->user_id = (int)sqlite3_last_insert_rowid(db);
     }
-    
+
     sqlite3_finalize(stmt);
 
     return (rc == SQLITE_DONE) ? 0 : -1;
@@ -629,6 +709,9 @@ int db_load_user_by_username(const char *username, User *out_user)
     if (!username || !out_user)
         return -1;
 
+    if (!db)
+        return -1;
+
     const char *sql = "SELECT * FROM users WHERE username = ?";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
@@ -658,6 +741,9 @@ int db_load_user_by_username(const char *username, User *out_user)
 int db_update_user(User *user)
 {
     if (!user)
+        return -1;
+
+    if (!db)
         return -1;
 
     const char *sql = "UPDATE users SET username = ?, password_hash = ?, balance = ?, "
@@ -809,11 +895,15 @@ int db_load_inventory(int user_id, Inventory *out_inv)
     if (!out_inv)
         return -1;
 
+    if (!db)
+        return -1;
+
     out_inv->user_id = user_id;
     out_inv->count = 0;
     memset(out_inv->skin_ids, 0, sizeof(out_inv->skin_ids));
 
-    const char *sql = "SELECT skin_id FROM inventories WHERE user_id = ?";
+    // Load instance_id from inventories table
+    const char *sql = "SELECT instance_id FROM inventories WHERE user_id = ?";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
@@ -824,7 +914,7 @@ int db_load_inventory(int user_id, Inventory *out_inv)
     int count = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW && count < MAX_INVENTORY_SIZE)
     {
-        out_inv->skin_ids[count++] = sqlite3_column_int(stmt, 0);
+        out_inv->skin_ids[count++] = sqlite3_column_int(stmt, 0); // Store instance_id
     }
 
     out_inv->count = count;
@@ -834,14 +924,18 @@ int db_load_inventory(int user_id, Inventory *out_inv)
 
 int db_add_to_inventory(int user_id, int skin_id)
 {
-    const char *sql = "INSERT INTO inventories (user_id, skin_id) VALUES (?, ?)";
+    if (!db)
+        return -1;
+
+    // Note: skin_id parameter is actually instance_id in the new system
+    const char *sql = "INSERT OR IGNORE INTO inventories (user_id, instance_id) VALUES (?, ?)";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
         return -1;
 
     sqlite3_bind_int(stmt, 1, user_id);
-    sqlite3_bind_int(stmt, 2, skin_id);
+    sqlite3_bind_int(stmt, 2, skin_id); // Actually instance_id
 
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -851,14 +945,18 @@ int db_add_to_inventory(int user_id, int skin_id)
 
 int db_remove_from_inventory(int user_id, int skin_id)
 {
-    const char *sql = "DELETE FROM inventories WHERE user_id = ? AND skin_id = ?";
+    if (!db)
+        return -1;
+
+    // Note: skin_id parameter is actually instance_id in the new system
+    const char *sql = "DELETE FROM inventories WHERE user_id = ? AND instance_id = ?";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
         return -1;
 
     sqlite3_bind_int(stmt, 1, user_id);
-    sqlite3_bind_int(stmt, 2, skin_id);
+    sqlite3_bind_int(stmt, 2, skin_id); // Actually instance_id
 
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -871,6 +969,9 @@ int db_remove_from_inventory(int user_id, int skin_id)
 int db_save_trade(TradeOffer *trade)
 {
     if (!trade)
+        return -1;
+
+    if (!db)
         return -1;
 
     // Serialize arrays to JSON strings
@@ -933,6 +1034,9 @@ int db_save_trade(TradeOffer *trade)
 int db_load_trade(int trade_id, TradeOffer *out_trade)
 {
     if (!out_trade)
+        return -1;
+
+    if (!db)
         return -1;
 
     const char *sql = "SELECT * FROM trades WHERE trade_id = ?";
@@ -1365,6 +1469,9 @@ int db_load_skin_definition_with_rarity(int definition_id, char *name, float *ba
     if (!name || !base_price || !rarity)
         return -1;
 
+    if (!db)
+        return -1;
+
     const char *sql = "SELECT name, base_price, rarity FROM skin_definitions WHERE definition_id = ?";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
@@ -1392,6 +1499,9 @@ int db_get_case_skins_by_rarity(int case_id, SkinRarity rarity, int *definition_
     if (!definition_ids || !count)
         return -1;
 
+    if (!db)
+        return -1;
+
     const char *sql = "SELECT DISTINCT cs.definition_id FROM case_skins cs "
                       "INNER JOIN skin_definitions sd ON cs.definition_id = sd.definition_id "
                       "WHERE cs.case_id = ? AND sd.rarity = ?";
@@ -1416,9 +1526,6 @@ int db_get_case_skins_by_rarity(int case_id, SkinRarity rarity, int *definition_
     *count = idx;
     sqlite3_finalize(stmt);
     return 0;
-
-    sqlite3_finalize(stmt);
-    return -1;
 }
 
 int db_load_skin_instance(int instance_id, int *definition_id, SkinRarity *rarity, WearCondition *wear, int *pattern_seed, int *is_stattrak, int *owner_id, time_t *acquired_at, int *is_tradable)
@@ -1455,6 +1562,9 @@ int db_load_skin_instance(int instance_id, int *definition_id, SkinRarity *rarit
 int db_create_skin_instance(int definition_id, SkinRarity rarity, WearCondition wear, int pattern_seed, int is_stattrak, int owner_id, int *out_instance_id)
 {
     if (!out_instance_id)
+        return -1;
+
+    if (!db)
         return -1;
 
     const char *sql = "INSERT INTO skin_instances (definition_id, rarity, wear, pattern_seed, is_stattrak, owner_id, acquired_at, is_tradable) "
@@ -1626,13 +1736,14 @@ int db_fetch_full_case_info(int case_id, void *out_skins, int *out_count)
     sqlite3_bind_int(stmt, 1, case_id);
 
     // Cast to struct with proper layout
-    typedef struct {
+    typedef struct
+    {
         int def_id;
         char name[64]; // MAX_ITEM_NAME_LEN
         SkinRarity rarity;
         float base_price;
     } CaseSkinInfo;
-    
+
     CaseSkinInfo *skins = (CaseSkinInfo *)out_skins;
 
     int idx = 0;
@@ -1652,11 +1763,96 @@ int db_fetch_full_case_info(int case_id, void *out_skins, int *out_count)
     return 0;
 }
 
+// Check if instance is in any pending trade
+int db_is_instance_in_pending_trade(int instance_id)
+{
+    if (!db || instance_id <= 0)
+        return 0; // Not in trade if invalid
+
+    // Check if instance is in any pending trade (either offered or requested)
+    const char *sql = "SELECT COUNT(*) FROM trades WHERE status = ? AND (offered_skins LIKE ? OR requested_skins LIKE ?)";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return 0; // Assume not in trade if query fails
+
+    sqlite3_bind_int(stmt, 1, TRADE_PENDING);
+
+    // Build LIKE pattern: [instance_id] or [instance_id, or ,instance_id, or ,instance_id]
+    char pattern1[64], pattern2[64], pattern3[64], pattern4[64];
+    snprintf(pattern1, sizeof(pattern1), "[%d]", instance_id);
+    snprintf(pattern2, sizeof(pattern2), "[%d,", instance_id);
+    snprintf(pattern3, sizeof(pattern3), ",%d,", instance_id);
+    snprintf(pattern4, sizeof(pattern4), ",%d]", instance_id);
+
+    // Check offered_skins
+    sqlite3_bind_text(stmt, 2, pattern1, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, pattern1, -1, SQLITE_STATIC);
+
+    int result = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        result = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+
+    if (result > 0)
+        return 1;
+
+    // Also check with other patterns
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc == SQLITE_OK)
+    {
+        sqlite3_bind_int(stmt, 1, TRADE_PENDING);
+        sqlite3_bind_text(stmt, 2, pattern2, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, pattern2, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) > 0)
+        {
+            sqlite3_finalize(stmt);
+            return 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc == SQLITE_OK)
+    {
+        sqlite3_bind_int(stmt, 1, TRADE_PENDING);
+        sqlite3_bind_text(stmt, 2, pattern3, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, pattern3, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) > 0)
+        {
+            sqlite3_finalize(stmt);
+            return 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc == SQLITE_OK)
+    {
+        sqlite3_bind_int(stmt, 1, TRADE_PENDING);
+        sqlite3_bind_text(stmt, 2, pattern4, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, pattern4, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) > 0)
+        {
+            sqlite3_finalize(stmt);
+            return 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return 0; // Not in any pending trade
+}
+
 // ==================== MARKET LISTINGS V2 OPERATIONS ====================
 
 int db_save_listing_v2(int seller_id, int instance_id, float price, int *out_listing_id)
 {
     if (!out_listing_id)
+        return -1;
+
+    if (!db)
         return -1;
 
     const char *sql = "INSERT INTO market_listings_v2 (seller_id, instance_id, price, listed_at, is_sold) "
@@ -1728,7 +1924,7 @@ int db_search_listings_by_name(const char *search_term, MarketListing *out_listi
                       "INNER JOIN skin_definitions sd ON si.definition_id = sd.definition_id "
                       "WHERE ml.is_sold = 0 AND sd.name LIKE ? "
                       "ORDER BY ml.listed_at DESC";
-    
+
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
@@ -1996,6 +2192,9 @@ int db_load_cases(Case *out_cases, int *count)
     if (!out_cases || !count)
         return -1;
 
+    if (!db)
+        return -1;
+
     const char *sql = "SELECT c.case_id, c.name, c.price, "
                       "COUNT(cs.definition_id) as skin_count "
                       "FROM cases c "
@@ -2034,6 +2233,9 @@ int db_load_cases(Case *out_cases, int *count)
 int db_load_case(int case_id, Case *out_case)
 {
     if (!out_case)
+        return -1;
+
+    if (!db)
         return -1;
 
     const char *sql = "SELECT case_id, name, price, possible_skins, probabilities, skin_count FROM cases WHERE case_id = ?";
@@ -2470,4 +2672,98 @@ int db_load_recent_chat_messages(ChatMessage *out_messages, int *count, int limi
     *count = idx;
     sqlite3_finalize(stmt);
     return 0;
+}
+
+// ==================== PRICE HISTORY OPERATIONS ====================
+
+int db_save_price_history(int definition_id, float price, int transaction_type)
+{
+    if (definition_id <= 0 || price <= 0)
+        return -1;
+
+    const char *sql = "INSERT INTO price_history (definition_id, price, transaction_type, timestamp) "
+                      "VALUES (?, ?, ?, ?)";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, definition_id);
+    sqlite3_bind_double(stmt, 2, price);
+    sqlite3_bind_int(stmt, 3, transaction_type);
+    sqlite3_bind_int64(stmt, 4, time(NULL));
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_get_price_history_24h(int definition_id, PriceHistoryEntry *out_history, int *count)
+{
+    if (!out_history || !count || definition_id <= 0)
+        return -1;
+
+    time_t now = time(NULL);
+    time_t day_ago = now - (24 * 60 * 60); // 24 hours ago
+
+    const char *sql = "SELECT price, transaction_type, timestamp "
+                      "FROM price_history "
+                      "WHERE definition_id = ? AND timestamp >= ? "
+                      "ORDER BY timestamp ASC "
+                      "LIMIT 100";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+    {
+        *count = 0;
+        return 0;
+    }
+
+    sqlite3_bind_int(stmt, 1, definition_id);
+    sqlite3_bind_int64(stmt, 2, day_ago);
+
+    int idx = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && idx < 100)
+    {
+        out_history[idx].definition_id = definition_id;
+        out_history[idx].price = (float)sqlite3_column_double(stmt, 0);
+        out_history[idx].transaction_type = sqlite3_column_int(stmt, 1);
+        out_history[idx].timestamp = sqlite3_column_int64(stmt, 2);
+        idx++;
+    }
+
+    *count = idx;
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+int db_get_price_24h_ago(int definition_id, float *out_price)
+{
+    if (!out_price || definition_id <= 0)
+        return -1;
+
+    time_t now = time(NULL);
+    time_t day_ago = now - (24 * 60 * 60); // 24 hours ago
+
+    const char *sql = "SELECT price FROM price_history "
+                      "WHERE definition_id = ? AND timestamp >= ? "
+                      "ORDER BY timestamp ASC LIMIT 1";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, definition_id);
+    sqlite3_bind_int64(stmt, 2, day_ago);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        *out_price = (float)sqlite3_column_double(stmt, 0);
+        sqlite3_finalize(stmt);
+        return 0;
+    }
+
+    sqlite3_finalize(stmt);
+    return -1; // No price history found
 }

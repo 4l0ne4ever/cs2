@@ -198,6 +198,10 @@ int validate_trade(TradeOffer *offer)
 
         if (owner_id != offer->from_user_id)
             return -3; // Not owner
+        
+        // Check if item is already in a pending trade
+        if (db_is_instance_in_pending_trade(instance_id))
+            return -13; // Item is already in a pending trade offer
 
         // Note: Trade lock check removed - items are only locked when listed on market
         // Trading between users does not require items to be unlocked
@@ -223,6 +227,10 @@ int validate_trade(TradeOffer *offer)
 
         if (owner_id != offer->to_user_id)
             return -6; // Not owner
+        
+        // Check if item is already in a pending trade
+        if (db_is_instance_in_pending_trade(instance_id))
+            return -14; // Item is already in a pending trade offer
 
         // Note: Trade lock check removed - items are only locked when listed on market
         // Trading between users does not require items to be unlocked

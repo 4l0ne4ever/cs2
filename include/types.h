@@ -25,7 +25,7 @@ typedef enum
 } SkinRarity;
 
 // Wear is now a float value (0.00-1.00) instead of enum
-// FN: 0.00-0.07, MW: 0.07-0.15, FT: 0.15-0.38, WW: 0.38-0.45, BS: 0.45-1.00
+// FN: 0.00-0.07, MW: 0.07-0.15, FT: 0.15-0.37, WW: 0.37-0.45, BS: 0.45-1.00
 typedef float WearCondition; // Float value 0.00-1.00
 
 // Helper enum for wear condition names (for display/UI)
@@ -33,8 +33,8 @@ typedef enum
 {
     WEAR_FN = 0, // Factory New (0.00-0.07)
     WEAR_MW,     // Minimal Wear (0.07-0.15)
-    WEAR_FT,     // Field-Tested (0.15-0.38)
-    WEAR_WW,     // Well-Worn (0.38-0.45)
+    WEAR_FT,     // Field-Tested (0.15-0.37)
+    WEAR_WW,     // Well-Worn (0.37-0.45)
     WEAR_BS      // Battle-Scarred (0.45-1.00)
 } WearConditionName;
 
@@ -146,6 +146,25 @@ typedef struct
     time_t timestamp;
 } TransactionLog;
 
+// Price history entry for tracking price changes
+typedef struct
+{
+    int definition_id;
+    float price;
+    time_t timestamp;
+    int transaction_type; // 0 = buy, 1 = sell
+} PriceHistoryEntry;
+
+// Price trend data
+typedef struct
+{
+    int definition_id;
+    float current_price;
+    float price_24h_ago;
+    float price_change_percent; // +5.2% or -2.1% or 0.0%
+    char trend_symbol[4]; // "▲", "▼", or "═"
+} PriceTrend;
+
 typedef struct
 {
     char session_token[37]; // UUID
@@ -227,5 +246,39 @@ typedef struct
     char message[256];
     time_t timestamp;
 } ChatMessage;
+
+// Leaderboard Entry
+typedef struct
+{
+    int user_id;
+    char username[MAX_USERNAME_LEN];
+    float value; // Net worth, unbox value, or profit
+    char details[128]; // Additional info (e.g., "Unboxed: AK-47 Redline")
+} LeaderboardEntry;
+
+// Trade Statistics
+typedef struct
+{
+    int user_id;
+    int trades_completed;
+    int items_bought;
+    int items_sold;
+    float avg_buy_price;
+    float avg_sell_price;
+    float net_profit;
+    float best_trade_profit;
+    float worst_trade_loss;
+    float win_rate; // Percentage
+} TradeStats;
+
+// Balance History Entry
+typedef struct
+{
+    time_t timestamp;
+    float balance;
+} BalanceHistoryEntry;
+
+// Trading Challenge (already defined in trading_challenges.h, but adding here for completeness)
+// Note: Full definition is in trading_challenges.h
 
 #endif // TYPES_H

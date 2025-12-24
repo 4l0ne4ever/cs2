@@ -11,6 +11,10 @@
 #include "../include/achievements.h"
 #include "../include/login_rewards.h"
 #include "../include/chat.h"
+#include "../include/price_tracking.h"
+#include "../include/leaderboards.h"
+#include "../include/trade_analytics.h"
+#include "../include/trading_challenges.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -382,6 +386,8 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
                 error_code = ERR_INSUFFICIENT_FUNDS; // Insufficient funds for listing fee
             else if (result == -6)
                 error_code = ERR_DATABASE_ERROR; // Failed to update balance
+            else if (result == -7)
+                error_code = ERR_INVALID_TRADE; // Item is in a pending trade
             
             create_error_response(response, MSG_SELL_TO_MARKET, error_code);
         }
@@ -459,6 +465,61 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
         break;
     }
     
+    case MSG_GET_PRICE_HISTORY:
+    {
+        // Parse: definition_id
+        uint32_t definition_id;
+        if (sscanf((char *)request->payload, "%u", &definition_id) != 1)
+        {
+            create_error_response(response, MSG_GET_PRICE_HISTORY, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        PriceHistoryEntry history[100];
+        int count = 0;
+        int result = get_price_history_24h((int)definition_id, history, &count);
+        
+        if (result == 0 && count > 0)
+        {
+            // Send price history data
+            create_success_response(response, MSG_PRICE_HISTORY_DATA, history, sizeof(PriceHistoryEntry) * count);
+            response->header.msg_length = sizeof(PriceHistoryEntry) * count;
+        }
+        else
+        {
+            // No history found
+            create_success_response(response, MSG_PRICE_HISTORY_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    case MSG_GET_PRICE_TREND:
+    {
+        // Parse: definition_id
+        uint32_t definition_id;
+        if (sscanf((char *)request->payload, "%u", &definition_id) != 1)
+        {
+            create_error_response(response, MSG_GET_PRICE_TREND, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        PriceTrend trend;
+        int result = get_price_trend((int)definition_id, &trend);
+        
+        if (result == 0)
+        {
+            // Send price trend data
+            create_success_response(response, MSG_PRICE_TREND_DATA, &trend, sizeof(PriceTrend));
+            response->header.msg_length = sizeof(PriceTrend);
+        }
+        else
+        {
+            // No trend data available
+            create_error_response(response, MSG_GET_PRICE_TREND, ERR_ITEM_NOT_FOUND);
+        }
+        break;
+    }
+    
     default:
         create_error_response(response, request->header.msg_type, ERR_INVALID_REQUEST);
         break;
@@ -522,6 +583,8 @@ static int handle_trading_request(int client_fd, Message *request, Message *resp
                 error_code = ERR_INSUFFICIENT_FUNDS;
             else if (result == -12)
                 error_code = ERR_INVALID_TRADE; // Empty trade
+            else if (result == -13 || result == -14)
+                error_code = ERR_INVALID_TRADE; // Item already in pending trade
             
             create_error_response(response, MSG_SEND_TRADE_OFFER, error_code);
         }
@@ -1043,6 +1106,389 @@ static int handle_chat_request(int client_fd, Message *request, Message *respons
     return send_response(client_fd, response);
 }
 
+// Handle leaderboards messages
+static int handle_leaderboards_request(int client_fd, Message *request, Message *response)
+{
+    switch (request->header.msg_type)
+    {
+    case MSG_GET_TOP_TRADERS:
+    {
+        // Parse: limit (optional, default 10)
+        int limit = 10;
+        if (request->header.msg_length > 0)
+        {
+            sscanf((char *)request->payload, "%d", &limit);
+        }
+        if (limit <= 0 || limit > 100)
+            limit = 10;
+        
+        LeaderboardEntry entries[100];
+        int count = 0;
+        int result = get_top_traders(entries, &count, limit);
+        
+        if (result == 0 && count > 0)
+        {
+            create_success_response(response, MSG_TOP_TRADERS_DATA, entries, sizeof(LeaderboardEntry) * count);
+            response->header.msg_length = sizeof(LeaderboardEntry) * count;
+        }
+        else
+        {
+            create_success_response(response, MSG_TOP_TRADERS_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    case MSG_GET_LUCKIEST_UNBOXERS:
+    {
+        // Parse: limit (optional, default 10)
+        int limit = 10;
+        if (request->header.msg_length > 0)
+        {
+            sscanf((char *)request->payload, "%d", &limit);
+        }
+        if (limit <= 0 || limit > 100)
+            limit = 10;
+        
+        LeaderboardEntry entries[100];
+        int count = 0;
+        int result = get_luckiest_unboxers(entries, &count, limit);
+        
+        if (result == 0 && count > 0)
+        {
+            create_success_response(response, MSG_LUCKIEST_UNBOXERS_DATA, entries, sizeof(LeaderboardEntry) * count);
+            response->header.msg_length = sizeof(LeaderboardEntry) * count;
+        }
+        else
+        {
+            create_success_response(response, MSG_LUCKIEST_UNBOXERS_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    case MSG_GET_MOST_PROFITABLE:
+    {
+        // Parse: limit (optional, default 10)
+        int limit = 10;
+        if (request->header.msg_length > 0)
+        {
+            sscanf((char *)request->payload, "%d", &limit);
+        }
+        if (limit <= 0 || limit > 100)
+            limit = 10;
+        
+        LeaderboardEntry entries[100];
+        int count = 0;
+        int result = get_most_profitable(entries, &count, limit);
+        
+        if (result == 0 && count > 0)
+        {
+            create_success_response(response, MSG_MOST_PROFITABLE_DATA, entries, sizeof(LeaderboardEntry) * count);
+            response->header.msg_length = sizeof(LeaderboardEntry) * count;
+        }
+        else
+        {
+            create_success_response(response, MSG_MOST_PROFITABLE_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    default:
+        create_error_response(response, request->header.msg_type, ERR_INVALID_REQUEST);
+        break;
+    }
+    
+    return send_response(client_fd, response);
+}
+
+// Handle trade analytics messages
+static int handle_trade_analytics_request(int client_fd, Message *request, Message *response)
+{
+    switch (request->header.msg_type)
+    {
+    case MSG_GET_TRADE_HISTORY:
+    {
+        // Parse: user_id:limit
+        uint32_t user_id;
+        int limit = 50;
+        if (sscanf((char *)request->payload, "%u:%d", &user_id, &limit) < 1)
+        {
+            create_error_response(response, MSG_GET_TRADE_HISTORY, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        if (limit <= 0 || limit > 100)
+            limit = 50;
+        
+        TransactionLog logs[100];
+        int count = 0;
+        int result = get_trade_history((int)user_id, logs, &count, limit);
+        
+        if (result == 0 && count > 0)
+        {
+            create_success_response(response, MSG_TRADE_HISTORY_DATA, logs, sizeof(TransactionLog) * count);
+            response->header.msg_length = sizeof(TransactionLog) * count;
+        }
+        else
+        {
+            create_success_response(response, MSG_TRADE_HISTORY_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    case MSG_GET_TRADE_STATS:
+    {
+        // Parse: user_id
+        uint32_t user_id;
+        if (sscanf((char *)request->payload, "%u", &user_id) != 1)
+        {
+            create_error_response(response, MSG_GET_TRADE_STATS, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        TradeStats stats;
+        int result = calculate_trade_stats((int)user_id, &stats);
+        
+        if (result == 0)
+        {
+            create_success_response(response, MSG_TRADE_STATS_DATA, &stats, sizeof(TradeStats));
+            response->header.msg_length = sizeof(TradeStats);
+        }
+        else
+        {
+            create_error_response(response, MSG_GET_TRADE_STATS, ERR_DATABASE_ERROR);
+        }
+        break;
+    }
+    
+    case MSG_GET_BALANCE_HISTORY:
+    {
+        // Parse: user_id:days
+        uint32_t user_id;
+        int days = 7;
+        if (sscanf((char *)request->payload, "%u:%d", &user_id, &days) < 1)
+        {
+            create_error_response(response, MSG_GET_BALANCE_HISTORY, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        if (days <= 0 || days > 30)
+            days = 7;
+        
+        BalanceHistoryEntry history[30];
+        int count = 0;
+        int result = get_balance_history((int)user_id, history, &count, days);
+        
+        if (result == 0 && count > 0)
+        {
+            create_success_response(response, MSG_BALANCE_HISTORY_DATA, history, sizeof(BalanceHistoryEntry) * count);
+            response->header.msg_length = sizeof(BalanceHistoryEntry) * count;
+        }
+        else
+        {
+            create_success_response(response, MSG_BALANCE_HISTORY_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    default:
+        create_error_response(response, request->header.msg_type, ERR_INVALID_REQUEST);
+        break;
+    }
+    
+    return send_response(client_fd, response);
+}
+
+// Handle trading challenges messages
+static int handle_trading_challenges_request(int client_fd, Message *request, Message *response)
+{
+    switch (request->header.msg_type)
+    {
+    case MSG_CREATE_CHALLENGE:
+    {
+        // Parse: challenger_id:opponent_id:duration_minutes
+        uint32_t challenger_id, opponent_id;
+        int duration_minutes;
+        if (sscanf((char *)request->payload, "%u:%u:%d", &challenger_id, &opponent_id, &duration_minutes) != 3)
+        {
+            create_error_response(response, MSG_CREATE_CHALLENGE, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        int challenge_id = 0;
+        int result = create_profit_race_challenge((int)challenger_id, (int)opponent_id, duration_minutes, &challenge_id);
+        
+        if (result == 0)
+        {
+            create_success_response(response, MSG_CREATE_CHALLENGE_RESPONSE, &challenge_id, sizeof(int));
+            response->header.msg_length = sizeof(int);
+        }
+        else
+        {
+            uint32_t error_code = ERR_INVALID_REQUEST;
+            if (result == -2)
+                error_code = ERR_INVALID_REQUEST; // Cannot challenge yourself
+            else if (result == -3 || result == -4)
+                error_code = ERR_ITEM_NOT_FOUND; // User not found
+            else
+                error_code = ERR_DATABASE_ERROR;
+            create_error_response(response, MSG_CREATE_CHALLENGE, error_code);
+        }
+        break;
+    }
+    
+    case MSG_GET_USER_CHALLENGES:
+    {
+        // Parse: user_id
+        uint32_t user_id;
+        if (sscanf((char *)request->payload, "%u", &user_id) != 1)
+        {
+            create_error_response(response, MSG_GET_USER_CHALLENGES, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        TradingChallenge challenges[50];
+        int count = 0;
+        int result = get_user_challenges((int)user_id, challenges, &count);
+        
+        if (result == 0 && count > 0)
+        {
+            create_success_response(response, MSG_USER_CHALLENGES_DATA, challenges, sizeof(TradingChallenge) * count);
+            response->header.msg_length = sizeof(TradingChallenge) * count;
+        }
+        else
+        {
+            create_success_response(response, MSG_USER_CHALLENGES_DATA, NULL, 0);
+        }
+        break;
+    }
+    
+    case MSG_ACCEPT_CHALLENGE:
+    {
+        // Parse: challenge_id:user_id
+        uint32_t challenge_id, user_id;
+        if (sscanf((char *)request->payload, "%u:%u", &challenge_id, &user_id) != 2)
+        {
+            create_error_response(response, MSG_ACCEPT_CHALLENGE, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        int result = accept_challenge((int)challenge_id, (int)user_id);
+        
+        if (result == 0)
+        {
+            create_success_response(response, MSG_ACCEPT_CHALLENGE_RESPONSE, NULL, 0);
+        }
+        else
+        {
+            uint32_t error_code = ERR_INVALID_REQUEST;
+            if (result == -1)
+                error_code = ERR_ITEM_NOT_FOUND; // Challenge not found
+            else if (result == -2)
+                error_code = ERR_PERMISSION_DENIED; // Not authorized
+            else if (result == -3)
+                error_code = ERR_INVALID_REQUEST; // Challenge not pending
+            else
+                error_code = ERR_DATABASE_ERROR;
+            create_error_response(response, MSG_ACCEPT_CHALLENGE, error_code);
+        }
+        break;
+    }
+    
+    case MSG_UPDATE_CHALLENGE_PROGRESS:
+    {
+        // Parse: challenge_id
+        uint32_t challenge_id;
+        if (sscanf((char *)request->payload, "%u", &challenge_id) != 1)
+        {
+            create_error_response(response, MSG_UPDATE_CHALLENGE_PROGRESS, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        int result = update_challenge_progress((int)challenge_id);
+        
+        if (result == 0)
+        {
+            TradingChallenge challenge;
+            if (get_challenge((int)challenge_id, &challenge) == 0)
+            {
+                create_success_response(response, MSG_UPDATE_CHALLENGE_PROGRESS_RESPONSE, &challenge, sizeof(TradingChallenge));
+                response->header.msg_length = sizeof(TradingChallenge);
+            }
+            else
+            {
+                create_error_response(response, MSG_UPDATE_CHALLENGE_PROGRESS, ERR_DATABASE_ERROR);
+            }
+        }
+        else
+        {
+            create_error_response(response, MSG_UPDATE_CHALLENGE_PROGRESS, ERR_DATABASE_ERROR);
+        }
+        break;
+    }
+    
+    case MSG_COMPLETE_CHALLENGE:
+    {
+        // Parse: challenge_id
+        uint32_t challenge_id;
+        if (sscanf((char *)request->payload, "%u", &challenge_id) != 1)
+        {
+            create_error_response(response, MSG_COMPLETE_CHALLENGE, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        int winner_id = 0;
+        int result = complete_challenge((int)challenge_id, &winner_id);
+        
+        if (result == 0)
+        {
+            create_success_response(response, MSG_COMPLETE_CHALLENGE_RESPONSE, &winner_id, sizeof(int));
+            response->header.msg_length = sizeof(int);
+        }
+        else
+        {
+            create_error_response(response, MSG_COMPLETE_CHALLENGE, ERR_DATABASE_ERROR);
+        }
+        break;
+    }
+    
+    case MSG_CANCEL_CHALLENGE:
+    {
+        // Parse: challenge_id:user_id
+        uint32_t challenge_id, user_id;
+        if (sscanf((char *)request->payload, "%u:%u", &challenge_id, &user_id) != 2)
+        {
+            create_error_response(response, MSG_CANCEL_CHALLENGE, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        int result = cancel_challenge((int)challenge_id, (int)user_id);
+        
+        if (result == 0)
+        {
+            create_success_response(response, MSG_CANCEL_CHALLENGE_RESPONSE, NULL, 0);
+        }
+        else
+        {
+            uint32_t error_code = ERR_INVALID_REQUEST;
+            if (result == -1)
+                error_code = ERR_ITEM_NOT_FOUND; // Challenge not found
+            else if (result == -2)
+                error_code = ERR_PERMISSION_DENIED; // Not authorized
+            else if (result == -3)
+                error_code = ERR_INVALID_REQUEST; // Cannot cancel completed challenge
+            else
+                error_code = ERR_DATABASE_ERROR;
+            create_error_response(response, MSG_CANCEL_CHALLENGE, error_code);
+        }
+        break;
+    }
+    
+    default:
+        create_error_response(response, request->header.msg_type, ERR_INVALID_REQUEST);
+        break;
+    }
+    
+    return send_response(client_fd, response);
+}
+
 // Main request handler - routes to appropriate handler
 int handle_client_request(int client_fd, Message *request)
 {
@@ -1058,7 +1504,7 @@ int handle_client_request(int client_fd, Message *request)
     {
         handle_auth_request(client_fd, request, &response);
     }
-    else if (msg_type >= MSG_GET_MARKET_LISTINGS && msg_type <= MSG_SEARCH_MARKET_BY_NAME)
+    else if (msg_type >= MSG_GET_MARKET_LISTINGS && msg_type <= MSG_PRICE_TREND_DATA)
     {
         handle_market_request(client_fd, request, &response);
     }
@@ -1066,7 +1512,7 @@ int handle_client_request(int client_fd, Message *request)
     {
         handle_trading_request(client_fd, request, &response);
     }
-    else if (msg_type >= MSG_GET_INVENTORY && msg_type <= MSG_SEARCH_USER_RESPONSE)
+    else if (msg_type >= MSG_GET_INVENTORY && msg_type <= MSG_DEFINITION_ID_DATA)
     {
         handle_inventory_request(client_fd, request, &response);
     }
@@ -1081,6 +1527,18 @@ int handle_client_request(int client_fd, Message *request)
     else if (msg_type >= MSG_GET_QUESTS && msg_type <= MSG_LOGIN_REWARD_DATA)
     {
         handle_quests_request(client_fd, request, &response);
+    }
+    else if (msg_type >= MSG_GET_TOP_TRADERS && msg_type <= MSG_MOST_PROFITABLE_DATA)
+    {
+        handle_leaderboards_request(client_fd, request, &response);
+    }
+    else if (msg_type >= MSG_GET_TRADE_HISTORY && msg_type <= MSG_BALANCE_HISTORY_DATA)
+    {
+        handle_trade_analytics_request(client_fd, request, &response);
+    }
+    else if (msg_type >= MSG_CREATE_CHALLENGE && msg_type <= MSG_CANCEL_CHALLENGE_RESPONSE)
+    {
+        handle_trading_challenges_request(client_fd, request, &response);
     }
     else if (msg_type == MSG_HEARTBEAT)
     {

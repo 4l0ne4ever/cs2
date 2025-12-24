@@ -4,6 +4,7 @@
 #include "../include/database.h"
 #include "../include/types.h"
 #include "../include/quests.h"
+#include "../include/price_tracking.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +54,10 @@ int list_skin_on_market(int user_id, int instance_id, float price)
     // Check if already listed
     // (In a full implementation, we'd check market_listings_v2 for active listings)
     // For now, we'll just create the listing
+    
+    // Check if item is in a pending trade
+    if (db_is_instance_in_pending_trade(instance_id))
+        return -7; // Item is in a pending trade offer
 
     // Check user balance for listing fee
     User user;
@@ -167,6 +172,22 @@ int buy_from_market(int buyer_id, int listing_id)
 
     // Apply trade lock to purchased item (only when buying from market)
     db_apply_trade_lock(instance_id);
+
+    // Get definition_id for price history tracking
+    int definition_id;
+    SkinRarity rarity;
+    WearCondition wear;
+    int pattern_seed, is_stattrak;
+    int owner_id;
+    time_t acquired_at;
+    int is_tradable;
+    if (db_load_skin_instance(instance_id, &definition_id, &rarity, &wear, &pattern_seed, &is_stattrak, &owner_id, &acquired_at, &is_tradable) == 0)
+    {
+        // Save price history for buy transaction (transaction_type = 0)
+        save_price_history(definition_id, price, 0);
+        // Save price history for sell transaction (transaction_type = 1)
+        save_price_history(definition_id, price, 1);
+    }
 
     // Log transaction
     TransactionLog log;

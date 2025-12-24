@@ -124,8 +124,8 @@ int main(int argc, char *argv[])
         if (user_id == 0)
             continue;
 
-        // Each user gets 15-25 random skins (increased for better demo)
-        int skins_per_user = 15 + (rand() % 11);
+        // Each user gets 20-30 random skins (ensure all users have items like normal users)
+        int skins_per_user = 20 + (rand() % 11);
 
         for (int s = 0; s < skins_per_user && def_count > 0; s++)
         {

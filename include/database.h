@@ -29,6 +29,7 @@ int db_save_trade(TradeOffer *trade);
 int db_load_trade(int trade_id, TradeOffer *out_trade);
 int db_update_trade(TradeOffer *trade);
 int db_get_user_trades(int user_id, TradeOffer *out_trades, int *count);
+int db_is_instance_in_pending_trade(int instance_id);
 
 // Market operations
 int db_save_listing(MarketListing *listing);
@@ -102,5 +103,10 @@ int db_load_login_streak(int user_id, LoginStreak *out_streak);
 // Chat operations
 int db_save_chat_message(int user_id, const char *username, const char *message);
 int db_load_recent_chat_messages(ChatMessage *out_messages, int *count, int limit);
+
+// Price history operations
+int db_save_price_history(int definition_id, float price, int transaction_type);
+int db_get_price_history_24h(int definition_id, PriceHistoryEntry *out_history, int *count);
+int db_get_price_24h_ago(int definition_id, float *out_price);
 
 #endif // DATABASE_H
