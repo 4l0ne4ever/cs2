@@ -203,6 +203,7 @@ int main(int argc, char *argv[])
                 float market_price = db_calculate_skin_price(definition_id, rarity, wear);
 
                 // Apply trade lock when listing on market (1 day lock)
+                // NOTE: Trade lock is applied to simulate real market behavior
                 db_apply_trade_lock(instance_id);
 
                 // Remove from inventory (item is now on market)

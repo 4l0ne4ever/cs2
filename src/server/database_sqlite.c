@@ -1568,7 +1568,7 @@ int db_create_skin_instance(int definition_id, SkinRarity rarity, WearCondition 
         return -1;
 
     const char *sql = "INSERT INTO skin_instances (definition_id, rarity, wear, pattern_seed, is_stattrak, owner_id, acquired_at, is_tradable) "
-                      "VALUES (?, ?, ?, ?, ?, ?, ?, 0)";
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, 1)"; // Default is_tradable = 1 (tradable)
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
