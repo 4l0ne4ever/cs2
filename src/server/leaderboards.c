@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 // Calculate net worth for a user (balance + inventory value)
 static float calculate_net_worth(int user_id)
@@ -121,10 +122,16 @@ int get_luckiest_unboxers(LeaderboardEntry *out_entries, int *count, int limit)
     if (!out_entries || !count || limit <= 0)
         return -1;
     
-    // Query transaction_logs for unbox transactions
-    // Find highest value unboxed items
-    const char *sql = "SELECT user_id, details FROM transaction_logs "
-                      "WHERE type = ? ORDER BY timestamp DESC";
+    // Query skin_instances directly to find highest value unboxed items
+    // Since transaction_logs may not have data, we'll use skin_instances with acquired_at
+    // This ensures we use data from mockdata
+    // JOIN with users and skin_definitions to get username and base_price directly
+    // We'll calculate price in code and sort by value
+    const char *sql = "SELECT si.instance_id, si.definition_id, si.rarity, si.wear, si.owner_id, "
+                      "u.username, sd.name, sd.base_price FROM skin_instances si "
+                      "JOIN users u ON si.owner_id = u.user_id "
+                      "JOIN skin_definitions sd ON si.definition_id = sd.definition_id "
+                      "WHERE si.owner_id > 0 AND si.acquired_at > 0";
     sqlite3_stmt *stmt;
     sqlite3 *db = db_get_connection();
     if (!db)
@@ -137,53 +144,30 @@ int get_luckiest_unboxers(LeaderboardEntry *out_entries, int *count, int limit)
         return 0;
     }
     
-    sqlite3_bind_int(stmt, 1, LOG_UNBOX);
-    
     LeaderboardEntry entries[100];
     int entry_count = 0;
     
     while (sqlite3_step(stmt) == SQLITE_ROW && entry_count < 100)
     {
-        int user_id = sqlite3_column_int(stmt, 0);
-        const char *details = (const char *)sqlite3_column_text(stmt, 1);
+        int instance_id = sqlite3_column_int(stmt, 0);
+        int definition_id = sqlite3_column_int(stmt, 1);
+        SkinRarity rarity = (SkinRarity)sqlite3_column_int(stmt, 2);
+        WearCondition wear = (WearCondition)sqlite3_column_double(stmt, 3);
+        int owner_id = sqlite3_column_int(stmt, 4);
+        const char *username = (const char *)sqlite3_column_text(stmt, 5);
+        const char *skin_name = (const char *)sqlite3_column_text(stmt, 6);
         
-        // Parse details to extract instance_id and calculate value
-        // Format: "Unboxed case X -> instance Y (def Z, rarity R, ...)"
-        int instance_id = 0;
-        if (sscanf(details, "Unboxed case %*d -> instance %d", &instance_id) == 1)
+        float price = db_calculate_skin_price(definition_id, rarity, wear);
+        
+        if (username && skin_name)
         {
-            // Get instance details and calculate price
-            int definition_id;
-            SkinRarity rarity;
-            WearCondition wear;
-            int pattern_seed, is_stattrak;
-            int owner_id;
-            time_t acquired_at;
-            int is_tradable;
-            
-            if (db_load_skin_instance(instance_id, &definition_id, &rarity, &wear, &pattern_seed, &is_stattrak, &owner_id, &acquired_at, &is_tradable) == 0)
-            {
-                float price = db_calculate_skin_price(definition_id, rarity, wear);
-                
-                // Get username
-                User user;
-                if (db_load_user(user_id, &user) == 0)
-                {
-                    // Get skin name
-                    char skin_name[64];
-                    float base_price;
-                    if (db_load_skin_definition(definition_id, skin_name, &base_price) == 0)
-                    {
-                        entries[entry_count].user_id = user_id;
-                        strncpy(entries[entry_count].username, user.username, 31);
-                        entries[entry_count].username[31] = '\0';
-                        entries[entry_count].value = price;
-                        snprintf(entries[entry_count].details, sizeof(entries[entry_count].details), 
-                                "Unboxed: %s", skin_name);
-                        entry_count++;
-                    }
-                }
-            }
+            entries[entry_count].user_id = owner_id;
+            strncpy(entries[entry_count].username, username, 31);
+            entries[entry_count].username[31] = '\0';
+            entries[entry_count].value = price;
+            snprintf(entries[entry_count].details, sizeof(entries[entry_count].details), 
+                    "Unboxed: %s", skin_name);
+            entry_count++;
         }
     }
     

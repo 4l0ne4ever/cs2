@@ -301,8 +301,28 @@ int handle_login(const char *username, const char *password)
 
     if (response.header.msg_type == MSG_LOGIN_RESPONSE)
     {
-        strncpy(g_session_token, (char *)response.payload, sizeof(g_session_token) - 1);
-        g_session_token[sizeof(g_session_token) - 1] = '\0';
+        // Parse: "session_token:user_id"
+        char payload_copy[MAX_PAYLOAD_SIZE + 1];
+        size_t payload_len = response.header.msg_length;
+        if (payload_len >= sizeof(payload_copy))
+            payload_len = sizeof(payload_copy) - 1;
+        memcpy(payload_copy, response.payload, payload_len);
+        payload_copy[payload_len] = '\0';
+        
+        char *colon = strchr(payload_copy, ':');
+        if (colon)
+        {
+            *colon = '\0';
+            strncpy(g_session_token, payload_copy, sizeof(g_session_token) - 1);
+            g_session_token[sizeof(g_session_token) - 1] = '\0';
+            g_user_id = atoi(colon + 1);
+        }
+        else
+        {
+            // Fallback: old format (just session token)
+            strncpy(g_session_token, (char *)response.payload, sizeof(g_session_token) - 1);
+            g_session_token[sizeof(g_session_token) - 1] = '\0';
+        }
         return 0;
     }
     else if (response.header.msg_type == MSG_ERROR)

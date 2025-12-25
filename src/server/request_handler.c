@@ -264,8 +264,11 @@ static int handle_auth_request(int client_fd, Message *request, Message *respons
         
         if (result == ERR_SUCCESS)
         {
-            // Success response with session token
-            create_success_response(response, MSG_LOGIN_RESPONSE, session.session_token, strlen(session.session_token));
+            // Success response with session token and user_id
+            // Format: "session_token:user_id"
+            char login_data[128];
+            snprintf(login_data, sizeof(login_data), "%s:%u", session.session_token, session.user_id);
+            create_success_response(response, MSG_LOGIN_RESPONSE, login_data, strlen(login_data));
         }
         else
         {
@@ -1126,14 +1129,23 @@ static int handle_leaderboards_request(int client_fd, Message *request, Message 
         int count = 0;
         int result = get_top_traders(entries, &count, limit);
         
-        if (result == 0 && count > 0)
+        if (result == 0)
         {
-            create_success_response(response, MSG_TOP_TRADERS_DATA, entries, sizeof(LeaderboardEntry) * count);
-            response->header.msg_length = sizeof(LeaderboardEntry) * count;
+            // Always return success, even if count is 0 (empty leaderboard)
+            if (count > 0)
+            {
+                create_success_response(response, MSG_TOP_TRADERS_DATA, entries, sizeof(LeaderboardEntry) * count);
+                response->header.msg_length = sizeof(LeaderboardEntry) * count;
+            }
+            else
+            {
+                create_success_response(response, MSG_TOP_TRADERS_DATA, NULL, 0);
+            }
         }
         else
         {
-            create_success_response(response, MSG_TOP_TRADERS_DATA, NULL, 0);
+            // Return error only if function failed
+            create_error_response(response, MSG_GET_TOP_TRADERS, ERR_DATABASE_ERROR);
         }
         break;
     }
@@ -1153,14 +1165,23 @@ static int handle_leaderboards_request(int client_fd, Message *request, Message 
         int count = 0;
         int result = get_luckiest_unboxers(entries, &count, limit);
         
-        if (result == 0 && count > 0)
+        if (result == 0)
         {
-            create_success_response(response, MSG_LUCKIEST_UNBOXERS_DATA, entries, sizeof(LeaderboardEntry) * count);
-            response->header.msg_length = sizeof(LeaderboardEntry) * count;
+            // Always return success, even if count is 0 (empty leaderboard)
+            if (count > 0)
+            {
+                create_success_response(response, MSG_LUCKIEST_UNBOXERS_DATA, entries, sizeof(LeaderboardEntry) * count);
+                response->header.msg_length = sizeof(LeaderboardEntry) * count;
+            }
+            else
+            {
+                create_success_response(response, MSG_LUCKIEST_UNBOXERS_DATA, NULL, 0);
+            }
         }
         else
         {
-            create_success_response(response, MSG_LUCKIEST_UNBOXERS_DATA, NULL, 0);
+            // Return error only if function failed
+            create_error_response(response, MSG_GET_LUCKIEST_UNBOXERS, ERR_DATABASE_ERROR);
         }
         break;
     }
@@ -1516,6 +1537,11 @@ int handle_client_request(int client_fd, Message *request)
     {
         handle_inventory_request(client_fd, request, &response);
     }
+    // Check leaderboards BEFORE unbox to avoid overlap (MSG_GET_TOP_TRADERS=0x0040 overlaps with MSG_UNBOX_CASE=0x0040)
+    else if (msg_type >= MSG_GET_TOP_TRADERS && msg_type <= MSG_MOST_PROFITABLE_DATA)
+    {
+        handle_leaderboards_request(client_fd, request, &response);
+    }
     else if (msg_type >= MSG_UNBOX_CASE && msg_type <= MSG_CASES_DATA)
     {
         handle_unbox_request(client_fd, request, &response);
@@ -1527,10 +1553,6 @@ int handle_client_request(int client_fd, Message *request)
     else if (msg_type >= MSG_GET_QUESTS && msg_type <= MSG_LOGIN_REWARD_DATA)
     {
         handle_quests_request(client_fd, request, &response);
-    }
-    else if (msg_type >= MSG_GET_TOP_TRADERS && msg_type <= MSG_MOST_PROFITABLE_DATA)
-    {
-        handle_leaderboards_request(client_fd, request, &response);
     }
     else if (msg_type >= MSG_GET_TRADE_HISTORY && msg_type <= MSG_BALANCE_HISTORY_DATA)
     {
