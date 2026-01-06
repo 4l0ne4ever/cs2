@@ -157,17 +157,17 @@ int get_luckiest_unboxers(LeaderboardEntry *out_entries, int *count, int limit)
         const char *username = (const char *)sqlite3_column_text(stmt, 5);
         const char *skin_name = (const char *)sqlite3_column_text(stmt, 6);
         
-        float price = db_calculate_skin_price(definition_id, rarity, wear);
-        
+                float price = db_calculate_skin_price(definition_id, rarity, wear);
+                
         if (username && skin_name)
-        {
+                    {
             entries[entry_count].user_id = owner_id;
             strncpy(entries[entry_count].username, username, 31);
-            entries[entry_count].username[31] = '\0';
-            entries[entry_count].value = price;
-            snprintf(entries[entry_count].details, sizeof(entries[entry_count].details), 
-                    "Unboxed: %s", skin_name);
-            entry_count++;
+                        entries[entry_count].username[31] = '\0';
+                        entries[entry_count].value = price;
+                        snprintf(entries[entry_count].details, sizeof(entries[entry_count].details), 
+                                "Unboxed: %s", skin_name);
+                        entry_count++;
         }
     }
     

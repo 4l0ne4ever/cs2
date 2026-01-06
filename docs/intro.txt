@@ -41,7 +41,6 @@ IV. GAMEPLAY - CÁCH CHƠI
 A. KHỞI ĐẦU
    - Đăng ký tài khoản (username, password - SHA256)
    - Nhận $100 khởi điểm
-   - Nhận 1 skin miễn phí (Consumer rarity)
 
 B. CÁC HOẠT ĐỘNG CHÍNH
 
@@ -65,7 +64,7 @@ B. CÁC HOẠT ĐỘNG CHÍNH
      * Restricted (Purple): 3.20% - $20-$100
      * Mil-Spec (Blue): 79.92% - $0.10-$2
    - Animation spinning
-   - Trade lock 7 ngày cho skin vừa unbox
+   - Trade lock 7 ngày cho skin vừa mua từ market
 
 4. Daily Quests (Nhiệm vụ hàng ngày)
    - First Steps: +$15 (hoàn thành 3 trades)
@@ -75,11 +74,9 @@ B. CÁC HOẠT ĐỘNG CHÍNH
    - Social Trader: +$50 (trade với 10 người khác)
 
 5. Trade Lock System
-   - Items mới unbox bị khóa 7 ngày
    - Items vừa trade bị khóa 7 ngày
    - Trong thời gian khóa: có thể bán market, không thể trade lại
    - Sau 7 ngày tự động unlock
-
 
 V. ĐẶC ĐIỂM KỸ THUẬT
 

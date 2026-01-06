@@ -715,6 +715,7 @@ static int handle_unbox_request(int client_fd, Message *request, Message *respon
     case MSG_GET_CASES:
     {
         Case cases[50];
+        memset(cases, 0, sizeof(cases)); // Clear array first
         int count = 0;
         int result = get_available_cases(cases, &count);
         
@@ -743,6 +744,7 @@ static int handle_unbox_request(int client_fd, Message *request, Message *respon
         }
         
         Skin unboxed;
+        memset(&unboxed, 0, sizeof(Skin)); // Clear struct first to prevent leftover data
         int result = unbox_case((int)user_id, (int)case_id, &unboxed);
         
         if (result == 0)
@@ -1537,14 +1539,21 @@ int handle_client_request(int client_fd, Message *request)
     {
         handle_inventory_request(client_fd, request, &response);
     }
-    // Check leaderboards BEFORE unbox to avoid overlap (MSG_GET_TOP_TRADERS=0x0040 overlaps with MSG_UNBOX_CASE=0x0040)
-    else if (msg_type >= MSG_GET_TOP_TRADERS && msg_type <= MSG_MOST_PROFITABLE_DATA)
-    {
-        handle_leaderboards_request(client_fd, request, &response);
-    }
-    else if (msg_type >= MSG_UNBOX_CASE && msg_type <= MSG_CASES_DATA)
+    // Check leaderboards and unbox messages - handle overlaps explicitly
+    // MSG_GET_TOP_TRADERS (0x0040) == MSG_UNBOX_CASE (0x0040) - overlap!
+    // MSG_GET_LUCKIEST_UNBOXERS (0x0042) == MSG_GET_CASES (0x0042) - overlap!
+    // MSG_LUCKIEST_UNBOXERS_DATA (0x0043) == MSG_CASES_DATA (0x0043) - overlap!
+    // Need to check unbox messages FIRST (before leaderboards) to handle overlaps correctly
+    else if (msg_type == MSG_UNBOX_CASE || msg_type == MSG_UNBOX_RESULT || 
+             msg_type == MSG_GET_CASES || msg_type == MSG_CASES_DATA)
     {
         handle_unbox_request(client_fd, request, &response);
+    }
+    else if (msg_type == MSG_GET_TOP_TRADERS || msg_type == MSG_TOP_TRADERS_DATA || 
+             msg_type == MSG_GET_LUCKIEST_UNBOXERS || msg_type == MSG_LUCKIEST_UNBOXERS_DATA ||
+             msg_type == MSG_GET_MOST_PROFITABLE || msg_type == MSG_MOST_PROFITABLE_DATA)
+    {
+        handle_leaderboards_request(client_fd, request, &response);
     }
     else if (msg_type >= MSG_CHAT_GLOBAL && msg_type <= MSG_CHAT_HISTORY_DATA)
     {

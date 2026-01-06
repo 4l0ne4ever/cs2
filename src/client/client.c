@@ -1095,11 +1095,18 @@ void show_unbox()
         if (response.header.msg_type == MSG_CASES_DATA)
         {
             Case cases[50];
+            memset(cases, 0, sizeof(cases)); // Clear array first
             int count = response.header.msg_length / sizeof(Case);
             if (count > 50)
                 count = 50;
 
             memcpy(cases, response.payload, count * sizeof(Case));
+            
+            // Ensure all name fields are null-terminated
+            for (int i = 0; i < count; i++)
+            {
+                cases[i].name[sizeof(cases[i].name) - 1] = '\0';
+            }
 
             printf("\nAvailable Cases:\n\n");
             for (int i = 0; i < count; i++)
@@ -1136,7 +1143,10 @@ void show_unbox()
                                 if (response.header.msg_length >= sizeof(Skin))
                                 {
                                     Skin unboxed;
+                                    memset(&unboxed, 0, sizeof(Skin)); // Clear first
                                     memcpy(&unboxed, response.payload, sizeof(Skin));
+                                    // Ensure name is null-terminated
+                                    unboxed.name[sizeof(unboxed.name) - 1] = '\0';
 
                                     // Spinning animation: items scrolling fast then slowing down
                                     clear_screen();

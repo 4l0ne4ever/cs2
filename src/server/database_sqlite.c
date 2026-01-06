@@ -838,7 +838,15 @@ int db_load_skin(int skin_id, Skin *out_skin)
     if (sqlite3_step(stmt) == SQLITE_ROW)
     {
         out_skin->skin_id = sqlite3_column_int(stmt, 0);
-        strncpy(out_skin->name, (char *)sqlite3_column_text(stmt, 1), MAX_ITEM_NAME_LEN);
+        const char *skin_name = (char *)sqlite3_column_text(stmt, 1);
+        if (skin_name) {
+            size_t name_len = strlen(skin_name);
+            size_t copy_len = (name_len < MAX_ITEM_NAME_LEN - 1) ? name_len : MAX_ITEM_NAME_LEN - 1;
+            memcpy(out_skin->name, skin_name, copy_len);
+            out_skin->name[copy_len] = '\0';
+        } else {
+            out_skin->name[0] = '\0';
+        }
         out_skin->rarity = sqlite3_column_int(stmt, 2);
         out_skin->wear = (WearCondition)sqlite3_column_double(stmt, 3); // REAL column
         out_skin->pattern_seed = sqlite3_column_int(stmt, 4);
@@ -1453,7 +1461,15 @@ int db_load_skin_definition(int definition_id, char *name, float *base_price)
 
     if (sqlite3_step(stmt) == SQLITE_ROW)
     {
-        strncpy(name, (char *)sqlite3_column_text(stmt, 0), MAX_ITEM_NAME_LEN);
+        const char *def_name_src = (char *)sqlite3_column_text(stmt, 0);
+        if (def_name_src) {
+            size_t name_len = strlen(def_name_src);
+            size_t copy_len = (name_len < MAX_ITEM_NAME_LEN - 1) ? name_len : MAX_ITEM_NAME_LEN - 1;
+            memcpy(name, def_name_src, copy_len);
+            name[copy_len] = '\0';
+        } else {
+            name[0] = '\0';
+        }
         *base_price = (float)sqlite3_column_double(stmt, 1);
         sqlite3_finalize(stmt);
         return 0;
@@ -1482,9 +1498,11 @@ int db_load_skin_definition_with_rarity(int definition_id, char *name, float *ba
 
     if (sqlite3_step(stmt) == SQLITE_ROW)
     {
-        strncpy(name, (char *)sqlite3_column_text(stmt, 0), MAX_ITEM_NAME_LEN);
+        strncpy(name, (char *)sqlite3_column_text(stmt, 0), MAX_ITEM_NAME_LEN - 1);
+        name[MAX_ITEM_NAME_LEN - 1] = '\0'; // Ensure null terminator
         *base_price = (float)sqlite3_column_double(stmt, 1);
         *rarity = (SkinRarity)sqlite3_column_int(stmt, 2);
+        
         sqlite3_finalize(stmt);
         return 0;
     }
@@ -2199,9 +2217,11 @@ int db_load_cases(Case *out_cases, int *count)
                       "COUNT(cs.definition_id) as skin_count "
                       "FROM cases c "
                       "LEFT JOIN case_skins cs ON c.case_id = cs.case_id "
-                      "GROUP BY c.case_id, c.name, c.price";
+                      "GROUP BY c.case_id, c.name, c.price "
+                      "ORDER BY c.case_id";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    
     if (rc != SQLITE_OK)
     {
         *count = 0;
@@ -2212,11 +2232,29 @@ int db_load_cases(Case *out_cases, int *count)
     while (sqlite3_step(stmt) == SQLITE_ROW && idx < 50)
     {
         Case *c = &out_cases[idx];
+        memset(c, 0, sizeof(Case)); // Clear entire struct first
+        
         c->case_id = sqlite3_column_int(stmt, 0);
         const char *name = (const char *)sqlite3_column_text(stmt, 1);
-        strncpy(c->name, name ? name : "", sizeof(c->name));
-        c->price = (float)sqlite3_column_double(stmt, 2);
-        c->skin_count = sqlite3_column_int(stmt, 3);
+        double price_val = sqlite3_column_double(stmt, 2);
+        int skin_count_val = sqlite3_column_int(stmt, 3);
+        
+        // Clear name field first
+        memset(c->name, 0, sizeof(c->name));
+        
+        if (name && sqlite3_column_bytes(stmt, 1) > 0)
+        {
+            int name_bytes = sqlite3_column_bytes(stmt, 1);
+            size_t copy_len = (name_bytes < (int)sizeof(c->name) - 1) ? name_bytes : sizeof(c->name) - 1;
+            memcpy(c->name, name, copy_len);
+            c->name[copy_len] = '\0';
+        }
+        else
+        {
+            c->name[0] = '\0';
+        }
+        c->price = (float)price_val;
+        c->skin_count = skin_count_val;
 
         // Clear arrays (not used in new model)
         memset(c->possible_skins, 0, sizeof(c->possible_skins));
@@ -2248,10 +2286,25 @@ int db_load_case(int case_id, Case *out_case)
 
     if (sqlite3_step(stmt) == SQLITE_ROW)
     {
+        // Clear struct first to avoid any leftover data
+        memset(out_case, 0, sizeof(Case));
+        
         out_case->case_id = sqlite3_column_int(stmt, 0);
         const char *name = (const char *)sqlite3_column_text(stmt, 1);
-        strncpy(out_case->name, name ? name : "", sizeof(out_case->name));
-        out_case->price = (float)sqlite3_column_double(stmt, 2);
+        double price_val = sqlite3_column_double(stmt, 2);
+        
+        if (name && strlen(name) > 0)
+        {
+            size_t name_len = strlen(name);
+            size_t copy_len = (name_len < sizeof(out_case->name) - 1) ? name_len : sizeof(out_case->name) - 1;
+            memcpy(out_case->name, name, copy_len);
+            out_case->name[copy_len] = '\0';
+        }
+        else
+        {
+            out_case->name[0] = '\0';
+        }
+        out_case->price = (float)price_val;
 
         const char *skins_json = (const char *)sqlite3_column_text(stmt, 3);
         const char *probs_json = (const char *)sqlite3_column_text(stmt, 4);

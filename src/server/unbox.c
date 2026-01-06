@@ -30,7 +30,9 @@ int get_available_cases(Case *out_cases, int *count)
     if (!out_cases || !count)
         return -1;
 
-    return db_load_cases(out_cases, count);
+    int result = db_load_cases(out_cases, count);
+
+    return result;
 }
 
 void calculate_drop_rates(Case *case_data)
@@ -103,7 +105,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     // Step 0: Load case data and verify it exists
     Case case_data;
     int load_case_result = db_load_case(case_id, &case_data);
-    
+
     if (load_case_result != 0)
     {
         return -2; // Case not found
@@ -112,7 +114,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     // Step 0.1: Load user and check balance
     User user;
     int load_user_result = db_load_user(user_id, &user);
-    
+
     if (load_user_result != 0)
     {
         return -3; // User not found
@@ -120,7 +122,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
 
     // Step 0.2: Calculate total cost (case price + key price)
     float total_cost = case_data.price + CASE_KEY_PRICE;
-    
+
     if (user.balance < total_cost)
     {
         return ERR_INSUFFICIENT_FUNDS; // Insufficient funds
@@ -137,7 +139,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     // Step 1: Get all available rarities in this case first
     SkinRarity available_rarities[7];
     int rarity_count = 0;
-    
+
     // Check each rarity to see if it exists in this case
     for (SkinRarity r = RARITY_CONSUMER; r <= RARITY_CONTRABAND; r++)
     {
@@ -148,7 +150,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
             available_rarities[rarity_count++] = r;
         }
     }
-    
+
     if (rarity_count == 0)
     {
         // Rollback balance deduction on error
@@ -156,12 +158,12 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
         db_update_user(&user);
         return -5; // No skins available in this case
     }
-    
+
     // Step 2: Roll rarity from available rarities only, using CS2 drop rates
     // Mil-Spec: 79.92%, Restricted: 15.98%, Classified: 3.2%, Covert: 0.64%, Contraband: 0.26%
     float r = ((float)rand() / (float)RAND_MAX) * 100.0f;
     SkinRarity rolled_rarity;
-    
+
     // Try to roll in order of rarity (Contraband -> Covert -> Classified -> Restricted -> Mil-Spec)
     // But only if that rarity is available in the case
     int found = 0;
@@ -242,7 +244,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     int definition_ids[100];
     int skin_count = 0;
     int db_result = db_get_case_skins_by_rarity(case_id, rolled_rarity, definition_ids, &skin_count);
-    
+
     if (db_result != 0 || skin_count == 0)
     {
         // Rollback balance deduction on error
@@ -258,6 +260,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     char def_name[MAX_ITEM_NAME_LEN];
     float def_base_price;
     SkinRarity def_rarity;
+
     if (db_load_skin_definition_with_rarity(definition_id, def_name, &def_base_price, &def_rarity) != 0)
     {
         // Rollback balance deduction on error
@@ -324,8 +327,10 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     // Fill out_skin
     memset(out_skin, 0, sizeof(Skin));
     out_skin->skin_id = instance_id;
+
     strncpy(out_skin->name, def_name, MAX_ITEM_NAME_LEN);
-    out_skin->rarity = final_rarity; // Use definition's rarity, not rolled rarity
+    out_skin->name[MAX_ITEM_NAME_LEN - 1] = '\0'; // Ensure null terminator
+    out_skin->rarity = final_rarity;              // Use definition's rarity, not rolled rarity
     out_skin->wear = wear;
     out_skin->pattern_seed = pattern_seed;
     out_skin->is_stattrak = is_stattrak;
@@ -353,13 +358,13 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     // Step 11: Update quests and achievements
     // Lucky Gambler quest: Unbox 5 cases
     update_quest_progress(user_id, QUEST_LUCKY_GAMBLER, 1);
-    
+
     // First Knife achievement: Unbox Contraband (knife/glove)
     if (final_rarity == RARITY_CONTRABAND)
     {
         unlock_achievement(user_id, ACHIEVEMENT_FIRST_KNIFE);
     }
-    
+
     // Check quest completion
     check_quest_completion(user_id);
 
@@ -570,10 +575,10 @@ void broadcast_rare_unbox(int user_id, const Skin *unboxed_skin)
                  user.username, rarity_name, unboxed_skin->name,
                  unboxed_skin->is_stattrak ? " [StatTrak™]" : "",
                  unboxed_skin->current_price);
-        
+
         // Save as system message (user_id 0 = system)
         db_save_chat_message(0, "SYSTEM", broadcast_msg);
-        
+
         // Broadcast to all connected clients
         broadcast_to_all_clients("SYSTEM", broadcast_msg);
     }
