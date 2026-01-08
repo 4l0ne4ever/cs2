@@ -178,15 +178,9 @@ int login_user(const char *username, const char *password, Session *out_session)
     // Update login streak
     update_login_streak(user.user_id);
     
-    // Initialize daily quests if not exist (or reset if new day)
-    // Check if user has quests for today
-    Quest quests[10];
-    int quest_count = 0;
-    if (get_user_quests(user.user_id, quests, &quest_count) != 0 || quest_count == 0)
-    {
-        // No quests or failed to load, initialize new quests
-        init_daily_quests(user.user_id);
-    }
+    // Check and reset daily quests if needed (after 24 hours)
+    // This will reset quests that are older than 24 hours
+    check_and_reset_daily_quests(user.user_id);
 
     *out_session = session;
     return ERR_SUCCESS;

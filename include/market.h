@@ -18,6 +18,9 @@ int buy_from_market(int buyer_id, int listing_id);
 // Remove listing
 int remove_listing(int listing_id);
 
+// Get user's listing history (both sold and unsold)
+int get_user_listing_history(int user_id, MarketListing *out_listings, int *count);
+
 // Update market prices based on supply/demand
 void update_market_prices();
 

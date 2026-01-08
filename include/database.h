@@ -3,6 +3,10 @@
 
 #include "types.h"
 
+// Trade lock configuration - centralized setting
+#define TRADE_LOCK_DURATION_DAYS 7  // Items are locked for 7 days after trade/market purchase/listing
+#define TRADE_LOCK_DURATION_SECONDS (TRADE_LOCK_DURATION_DAYS * 24 * 60 * 60)
+
 // Initialize database files
 int db_init();
 void db_close();
@@ -70,6 +74,7 @@ int db_search_listings_by_name(const char *search_term, MarketListing *out_listi
 int db_get_listing_v2(int listing_id, int *seller_id, int *instance_id, float *price, int *is_sold);
 int db_mark_listing_sold(int listing_id);
 int db_remove_listing_v2(int listing_id);
+int db_load_user_listing_history(int user_id, MarketListing *out_listings, int *count);
 
 // Trade lock operations
 int db_check_trade_lock(int instance_id, int *is_locked);

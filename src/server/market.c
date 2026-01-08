@@ -2,6 +2,7 @@
 
 #include "../include/market.h"
 #include "../include/database.h"
+#include "../include/database_internal.h"
 #include "../include/types.h"
 #include "../include/quests.h"
 #include "../include/price_tracking.h"
@@ -72,8 +73,10 @@ int list_skin_on_market(int user_id, int instance_id, float price)
     if (db_update_user(&user) != 0)
         return -6; // Failed to update balance
 
-    // Apply trade lock when listing on market (1 day lock)
-    db_apply_trade_lock(instance_id);
+    // Note: NO trade lock when listing on market
+    // Item is removed from inventory and listed on market
+    // If seller cancels listing, item returns to inventory without lock
+    // Trade lock only applies when buyer purchases item from market
 
     // Remove from inventory (item is now on market)
     db_remove_from_inventory(user_id, instance_id);
@@ -170,7 +173,7 @@ int buy_from_market(int buyer_id, int listing_id)
         return -11; // Failed to add to inventory
     }
 
-    // Apply trade lock to purchased item (only when buying from market)
+    // Apply trade lock to purchased item (7 days lock)
     db_apply_trade_lock(instance_id);
 
     // Get definition_id for price history tracking
@@ -245,6 +248,19 @@ int remove_listing(int listing_id)
         db_update_user(&seller);
     }
 
+    // Return item to inventory (BUG FIX: items were not being returned)
+    if (db_add_to_inventory(seller_id, instance_id) != 0)
+    {
+        // If adding to inventory fails, still remove listing but return error code
+        db_remove_listing_v2(listing_id);
+        return -3; // Failed to return item to inventory
+    }
+
+    // Note: Item is returned to inventory with its original trade lock status preserved
+    // We don't apply trade lock when listing, so we don't need to unlock here
+    // If item was locked before listing (from previous trade/market purchase), it remains locked
+    // If item was unlocked before listing, it remains unlocked
+
     // Remove listing
     return db_remove_listing_v2(listing_id);
 }
@@ -258,6 +274,15 @@ void update_market_prices()
     // 2. Adjust base prices in skin_definitions
     // 3. Update current prices for all instances
     // For now, prices are calculated on-the-fly from base_price * wear_multiplier
+}
+
+// Get user's listing history (both sold and unsold)
+int get_user_listing_history(int user_id, MarketListing *out_listings, int *count)
+{
+    if (user_id <= 0 || !out_listings || !count)
+        return -1;
+
+    return db_load_user_listing_history(user_id, out_listings, count);
 }
 
 // Get current price for a skin definition with specific rarity and wear

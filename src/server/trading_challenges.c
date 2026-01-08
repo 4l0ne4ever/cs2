@@ -108,7 +108,8 @@ int get_challenge(int challenge_id, TradingChallenge *out_challenge)
     const char *sql = "SELECT challenge_id, challenger_id, opponent_id, type, status, "
                       "challenger_start_balance, opponent_start_balance, "
                       "challenger_current_profit, opponent_current_profit, "
-                      "start_time, end_time, duration_minutes "
+                      "start_time, end_time, duration_minutes, "
+                      "challenger_cancel_vote, opponent_cancel_vote "
                       "FROM trading_challenges WHERE challenge_id = ?";
     sqlite3_stmt *stmt;
     sqlite3 *db = db_get_connection();
@@ -135,6 +136,8 @@ int get_challenge(int challenge_id, TradingChallenge *out_challenge)
         out_challenge->start_time = sqlite3_column_int64(stmt, 9);
         out_challenge->end_time = sqlite3_column_int64(stmt, 10);
         out_challenge->duration_minutes = sqlite3_column_int(stmt, 11);
+        out_challenge->challenger_cancel_vote = sqlite3_column_int(stmt, 12);
+        out_challenge->opponent_cancel_vote = sqlite3_column_int(stmt, 13);
         sqlite3_finalize(stmt);
         return 0;
     }
@@ -152,7 +155,8 @@ int get_user_challenges(int user_id, TradingChallenge *out_challenges, int *coun
     const char *sql = "SELECT challenge_id, challenger_id, opponent_id, type, status, "
                       "challenger_start_balance, opponent_start_balance, "
                       "challenger_current_profit, opponent_current_profit, "
-                      "start_time, end_time, duration_minutes "
+                      "start_time, end_time, duration_minutes, "
+                      "challenger_cancel_vote, opponent_cancel_vote "
                       "FROM trading_challenges "
                       "WHERE (challenger_id = ? OR opponent_id = ?) AND status IN (?, ?) "
                       "ORDER BY start_time DESC LIMIT 50";
@@ -188,6 +192,8 @@ int get_user_challenges(int user_id, TradingChallenge *out_challenges, int *coun
         out_challenges[idx].start_time = sqlite3_column_int64(stmt, 9);
         out_challenges[idx].end_time = sqlite3_column_int64(stmt, 10);
         out_challenges[idx].duration_minutes = sqlite3_column_int(stmt, 11);
+        out_challenges[idx].challenger_cancel_vote = sqlite3_column_int(stmt, 12);
+        out_challenges[idx].opponent_cancel_vote = sqlite3_column_int(stmt, 13);
         idx++;
     }
     
@@ -317,7 +323,11 @@ int complete_challenge(int challenge_id, int *winner_id)
     return (rc == SQLITE_DONE) ? 0 : -3;
 }
 
-// Cancel challenge
+// Cancel challenge - requires vote from both players
+// If only one player votes and challenge is active for >24 hours, challenger (runner) loses money
+#define CHALLENGE_CANCEL_TIMEOUT_SECONDS (24 * 60 * 60) // 24 hours
+#define CHALLENGE_CANCEL_PENALTY_AMOUNT 100.0f // $100 penalty for runner
+
 int cancel_challenge(int challenge_id, int user_id)
 {
     TradingChallenge challenge;
@@ -327,24 +337,97 @@ int cancel_challenge(int challenge_id, int user_id)
     if (challenge.challenger_id != user_id && challenge.opponent_id != user_id)
         return -2; // Not authorized
     
-    if (challenge.status == CHALLENGE_COMPLETED)
-        return -3; // Cannot cancel completed challenge
+    if (challenge.status == CHALLENGE_COMPLETED || challenge.status == CHALLENGE_CANCELLED)
+        return -3; // Cannot cancel completed/cancelled challenge
     
-    const char *sql = "UPDATE trading_challenges SET status = ? WHERE challenge_id = ?";
-    sqlite3_stmt *stmt;
     sqlite3 *db = db_get_connection();
     if (!db)
         return -4;
     
-    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    // Update vote for the user
+    int is_challenger = (user_id == challenge.challenger_id);
+    int already_voted = is_challenger ? challenge.challenger_cancel_vote : challenge.opponent_cancel_vote;
+    
+    if (already_voted)
+        return -5; // Already voted
+    
+    // Set vote
+    const char *update_vote_sql;
+    if (is_challenger)
+    {
+        update_vote_sql = "UPDATE trading_challenges SET challenger_cancel_vote = 1 WHERE challenge_id = ?";
+    }
+    else
+    {
+        update_vote_sql = "UPDATE trading_challenges SET opponent_cancel_vote = 1 WHERE challenge_id = ?";
+    }
+    
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, update_vote_sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
         return -4;
     
-    sqlite3_bind_int(stmt, 1, CHALLENGE_CANCELLED);
-    sqlite3_bind_int(stmt, 2, challenge_id);
-    
+    sqlite3_bind_int(stmt, 1, challenge_id);
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     
-    return (rc == SQLITE_DONE) ? 0 : -4;
+    if (rc != SQLITE_DONE)
+        return -4;
+    
+    // Reload challenge to check votes
+    if (get_challenge(challenge_id, &challenge) != 0)
+        return -4;
+    
+    // Check if both players voted
+    if (challenge.challenger_cancel_vote && challenge.opponent_cancel_vote)
+    {
+        // Both voted - cancel challenge immediately
+        const char *cancel_sql = "UPDATE trading_challenges SET status = ? WHERE challenge_id = ?";
+        rc = sqlite3_prepare_v2(db, cancel_sql, -1, &stmt, 0);
+        if (rc == SQLITE_OK)
+        {
+            sqlite3_bind_int(stmt, 1, CHALLENGE_CANCELLED);
+            sqlite3_bind_int(stmt, 2, challenge_id);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+        return 0; // Success: both voted, challenge cancelled
+    }
+    
+    // Only one player voted - check timeout
+    if (challenge.status == CHALLENGE_ACTIVE && challenge.start_time > 0)
+    {
+        time_t now = time(NULL);
+        time_t elapsed = now - challenge.start_time;
+        
+        if (elapsed >= CHALLENGE_CANCEL_TIMEOUT_SECONDS)
+        {
+            // Timeout reached - challenger (runner) loses money and challenge is cancelled
+            User challenger;
+            if (db_load_user(challenge.challenger_id, &challenger) == 0)
+            {
+                // Apply penalty
+                challenger.balance -= CHALLENGE_CANCEL_PENALTY_AMOUNT;
+                if (challenger.balance < 0.0f)
+                    challenger.balance = 0.0f; // Don't allow negative balance
+                
+                db_update_user(&challenger);
+            }
+            
+            // Cancel challenge
+            const char *cancel_sql = "UPDATE trading_challenges SET status = ? WHERE challenge_id = ?";
+            rc = sqlite3_prepare_v2(db, cancel_sql, -1, &stmt, 0);
+            if (rc == SQLITE_OK)
+            {
+                sqlite3_bind_int(stmt, 1, CHALLENGE_CANCELLED);
+                sqlite3_bind_int(stmt, 2, challenge_id);
+                sqlite3_step(stmt);
+                sqlite3_finalize(stmt);
+            }
+            return 0; // Success: timeout reached, challenger penalized, challenge cancelled
+        }
+    }
+    
+    // Only one vote, no timeout yet - wait for other player's vote
+    return 0; // Success: vote recorded, waiting for other player
 }

@@ -8,6 +8,7 @@
 #include "../include/achievements.h"
 #include "../include/chat.h"
 #include "../include/request_handler.h"
+#include "../include/logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -345,19 +346,48 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     out_skin->acquired_at = time(NULL);
     out_skin->is_tradable = 0; // trade lock 7 ngày
 
-    // Step 10: Log unbox transaction
+    // Step 10: Calculate profit if skin value > unbox cost
+    float profit = 0.0f;
+    if (current_price > total_cost)
+    {
+        profit = current_price - total_cost;
+        LOG_INFO("[UNBOX] User %d unboxed profit: case_id=%d, cost=$%.2f, value=$%.2f, profit=+$%.2f",
+                 user_id, case_id, total_cost, current_price, profit);
+    }
+    else
+    {
+        float loss = total_cost - current_price;
+        LOG_DEBUG("[UNBOX] User %d unboxed: case_id=%d, cost=$%.2f, value=$%.2f, loss=$%.2f",
+                  user_id, case_id, total_cost, current_price, loss);
+    }
+
+    // Step 11: Log unbox transaction (include profit if any)
     TransactionLog log;
     log.log_id = 0;
     log.type = LOG_UNBOX;
     log.user_id = user_id;
-    snprintf(log.details, sizeof(log.details), "Unboxed case %d (%s) -> instance %d (def %d, rarity %d, wear %.10f, pattern %d, stattrak %d, cost $%.2f)",
-             case_id, case_data.name, instance_id, definition_id, final_rarity, wear, pattern_seed, is_stattrak, total_cost);
+    if (profit > 0.0f)
+    {
+        snprintf(log.details, sizeof(log.details), "Unboxed case %d (%s) -> instance %d (def %d, rarity %d, wear %.10f, pattern %d, stattrak %d, cost $%.2f, value $%.2f, profit +$%.2f)",
+                 case_id, case_data.name, instance_id, definition_id, final_rarity, wear, pattern_seed, is_stattrak, total_cost, current_price, profit);
+    }
+    else
+    {
+        snprintf(log.details, sizeof(log.details), "Unboxed case %d (%s) -> instance %d (def %d, rarity %d, wear %.10f, pattern %d, stattrak %d, cost $%.2f, value $%.2f)",
+                 case_id, case_data.name, instance_id, definition_id, final_rarity, wear, pattern_seed, is_stattrak, total_cost, current_price);
+    }
     log.timestamp = time(NULL);
     db_log_transaction(&log);
 
-    // Step 11: Update quests and achievements
+    // Step 12: Update quests and achievements
     // Lucky Gambler quest: Unbox 5 cases
     update_quest_progress(user_id, QUEST_LUCKY_GAMBLER, 1);
+    
+    // Profit Maker quest: Track profit from unbox (if skin value > cost)
+    if (profit > 0.0f)
+    {
+        update_quest_progress(user_id, QUEST_PROFIT_MAKER, (int)profit);
+    }
 
     // First Knife achievement: Unbox Contraband (knife/glove)
     if (final_rarity == RARITY_CONTRABAND)
@@ -368,7 +398,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     // Check quest completion
     check_quest_completion(user_id);
 
-    // Step 12: Broadcast rare drops (Contraband/Covert items)
+    // Step 13: Broadcast rare drops (Contraband/Covert items)
     if (final_rarity == RARITY_CONTRABAND || final_rarity == RARITY_COVERT)
     {
         broadcast_rare_unbox(user_id, out_skin);

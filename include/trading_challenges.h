@@ -31,6 +31,8 @@ typedef struct {
     time_t start_time;
     time_t end_time;
     int duration_minutes; // Challenge duration in minutes
+    int challenger_cancel_vote; // 0 = not voted, 1 = voted to cancel
+    int opponent_cancel_vote;   // 0 = not voted, 1 = voted to cancel
 } TradingChallenge;
 
 // Create a 1v1 profit race challenge

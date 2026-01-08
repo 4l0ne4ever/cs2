@@ -15,6 +15,8 @@
 #include "../include/leaderboards.h"
 #include "../include/trade_analytics.h"
 #include "../include/trading_challenges.h"
+#include "../include/logger.h"
+#include "../include/quests.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,7 +47,12 @@ int validate_message_header(MessageHeader *header)
 int receive_message(int client_fd, Message *message)
 {
     if (!message || client_fd < 0)
+    {
+        LOG_ERROR_CTX(0, client_fd, "[NETWORK] Cannot receive message: invalid socket or null message");
         return -1;
+    }
+    
+    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Waiting to receive message header (%zu bytes)...", sizeof(MessageHeader));
     
     // Receive header (handle partial receives)
     size_t total_received = 0;
@@ -57,24 +64,55 @@ int receive_message(int client_fd, Message *message)
                                 sizeof(MessageHeader) - total_received, 0);
         if (received <= 0)
         {
-            if (received == 0) return -1; // Connection closed
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return -1; // Timeout
-            if (errno == EINTR) continue; // Interrupted, retry
+            if (received == 0)
+            {
+                LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Connection closed by client while receiving header");
+                return -1; // Connection closed
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                LOG_DEBUG_CTX(0, client_fd, "[NETWORK] recv() would block (timeout)");
+                return -1; // Timeout
+            }
+            if (errno == EINTR)
+            {
+                LOG_DEBUG_CTX(0, client_fd, "[NETWORK] recv() interrupted, retrying...");
+                continue; // Interrupted, retry
+            }
+            LOG_ERROR_CTX(0, client_fd, "[NETWORK] recv() error while receiving header: %s", strerror(errno));
             return -1; // Error
         }
         total_received += received;
+        if (total_received < sizeof(MessageHeader))
+        {
+            LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Partial header received: %zu/%zu bytes", 
+                          total_received, sizeof(MessageHeader));
+        }
     }
+    
+    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Message header received: magic=0x%04X, type=0x%04X, length=%d, checksum=0x%08X, seq=%d",
+                  message->header.magic, message->header.msg_type, message->header.msg_length,
+                  message->header.checksum, message->header.sequence_num);
     
     // Validate header
     if (!validate_message_header(&message->header))
+    {
+        LOG_WARNING_CTX(0, client_fd, "[NETWORK] Invalid message header: magic=0x%04X, length=%d", 
+                         message->header.magic, message->header.msg_length);
         return -1;
+    }
     
     // Receive payload if present (handle partial receives)
     if (message->header.msg_length > 0)
     {
         if (message->header.msg_length > MAX_PAYLOAD_SIZE)
+        {
+            LOG_ERROR_CTX(0, client_fd, "[NETWORK] Message payload too large: %d bytes (max=%d)", 
+                          message->header.msg_length, MAX_PAYLOAD_SIZE);
             return -1;
+        }
         
+        LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Receiving message payload (%d bytes)...", message->header.msg_length);
         total_received = 0;
         while (total_received < message->header.msg_length)
         {
@@ -82,12 +120,30 @@ int receive_message(int client_fd, Message *message)
                                     message->header.msg_length - total_received, 0);
             if (received <= 0)
             {
-                if (received == 0) return -1; // Connection closed
-                if (errno == EAGAIN || errno == EWOULDBLOCK) return -1; // Timeout
-                if (errno == EINTR) continue; // Interrupted, retry
+                if (received == 0)
+                {
+                    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Connection closed by client while receiving payload");
+                    return -1; // Connection closed
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] recv() would block (timeout)");
+                    return -1; // Timeout
+                }
+                if (errno == EINTR)
+                {
+                    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] recv() interrupted, retrying...");
+                    continue; // Interrupted, retry
+                }
+                LOG_ERROR_CTX(0, client_fd, "[NETWORK] recv() error while receiving payload: %s", strerror(errno));
                 return -1; // Error
             }
             total_received += received;
+            if (total_received < message->header.msg_length)
+            {
+                LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Partial payload received: %zu/%d bytes", 
+                              total_received, message->header.msg_length);
+            }
         }
         
         // Ensure null termination (safety)
@@ -99,12 +155,39 @@ int receive_message(int client_fd, Message *message)
         {
             message->payload[MAX_PAYLOAD_SIZE - 1] = '\0';
         }
+        
+        LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Message payload received successfully (%zu bytes)", total_received);
+        
+        // Log payload preview (first 100 chars for debugging)
+        if (message->header.msg_length < 100)
+        {
+            LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Payload preview: %.*s", 
+                          (int)message->header.msg_length, message->payload);
+        }
+        else
+        {
+            LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Payload preview: %.100s...", message->payload);
+        }
+        
+        // Validate checksum
+        uint32_t calculated_checksum = calculate_checksum((const char *)message->payload, 
+                                                           (int)message->header.msg_length);
+        if (calculated_checksum != message->header.checksum)
+        {
+            LOG_ERROR_CTX(0, client_fd, "[NETWORK] Checksum mismatch: received=0x%08X, calculated=0x%08X", 
+                          message->header.checksum, calculated_checksum);
+            return -1;
+        }
+        LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Checksum validation passed: 0x%08X", calculated_checksum);
     }
     else
     {
         message->payload[0] = '\0';
+        LOG_DEBUG_CTX(0, client_fd, "[NETWORK] No payload in message (msg_length=0)");
     }
     
+    LOG_INFO_CTX(0, client_fd, "[NETWORK] Message received successfully: type=0x%04X, total_bytes=%zu", 
+                 message->header.msg_type, sizeof(MessageHeader) + message->header.msg_length);
     return 0;
 }
 
@@ -113,13 +196,20 @@ int send_response(int client_fd, Message *response)
 {
     if (!response || client_fd < 0)
     {
+        LOG_ERROR_CTX(0, client_fd, "[NETWORK] Cannot send response: invalid socket or null response");
         return -1;
     }
     
     // Calculate checksum (from protocol.c - declared in protocol.h)
     response->header.checksum = calculate_checksum((const char *)response->payload, (int)response->header.msg_length);
+    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Response checksum calculated: 0x%08X (payload_length=%d)", 
+                  response->header.checksum, response->header.msg_length);
     
     // Send header (handle partial sends)
+    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Sending response header: magic=0x%04X, type=0x%04X, length=%d, checksum=0x%08X, seq=%d",
+                  response->header.magic, response->header.msg_type, response->header.msg_length,
+                  response->header.checksum, response->header.sequence_num);
+    
     size_t total_sent = 0;
     const char *header_ptr = (const char *)&response->header;
     
@@ -129,20 +219,37 @@ int send_response(int client_fd, Message *response)
                            sizeof(MessageHeader) - total_sent, 0);
         if (sent < 0)
         {
-            if (errno == EINTR) continue; // Interrupted, retry
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return -1; // Would block
+            if (errno == EINTR)
+            {
+                LOG_DEBUG_CTX(0, client_fd, "[NETWORK] send() interrupted, retrying...");
+                continue; // Interrupted, retry
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                LOG_DEBUG_CTX(0, client_fd, "[NETWORK] send() would block");
+                return -1; // Would block
+            }
+            LOG_ERROR_CTX(0, client_fd, "[NETWORK] send() error while sending header: %s", strerror(errno));
             return -1; // Error
         }
         if (sent == 0)
         {
+            LOG_WARNING_CTX(0, client_fd, "[NETWORK] Connection closed while sending header");
             return -1; // Connection closed
         }
         total_sent += sent;
+        if (total_sent < sizeof(MessageHeader))
+        {
+            LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Partial header sent: %zu/%zu bytes", 
+                          total_sent, sizeof(MessageHeader));
+        }
     }
+    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Response header sent successfully (%zu bytes)", total_sent);
     
     // Send payload if present (handle partial sends)
     if (response->header.msg_length > 0)
     {
+        LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Sending response payload (%d bytes)...", response->header.msg_length);
         total_sent = 0;
         while (total_sent < response->header.msg_length)
         {
@@ -150,18 +257,51 @@ int send_response(int client_fd, Message *response)
                                response->header.msg_length - total_sent, 0);
             if (sent < 0)
             {
-                if (errno == EINTR) continue; // Interrupted, retry
-                if (errno == EAGAIN || errno == EWOULDBLOCK) return -1; // Would block
+                if (errno == EINTR)
+                {
+                    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] send() interrupted, retrying...");
+                    continue; // Interrupted, retry
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    LOG_DEBUG_CTX(0, client_fd, "[NETWORK] send() would block");
+                    return -1; // Would block
+                }
+                LOG_ERROR_CTX(0, client_fd, "[NETWORK] send() error while sending payload: %s", strerror(errno));
                 return -1; // Error
             }
             if (sent == 0)
             {
+                LOG_WARNING_CTX(0, client_fd, "[NETWORK] Connection closed while sending payload");
                 return -1; // Connection closed
             }
             total_sent += sent;
+            if (total_sent < response->header.msg_length)
+            {
+                LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Partial payload sent: %zu/%d bytes", 
+                              total_sent, response->header.msg_length);
+            }
+        }
+        LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Response payload sent successfully (%zu bytes)", total_sent);
+        
+        // Log payload preview (first 100 chars for debugging)
+        if (response->header.msg_length < 100)
+        {
+            LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Payload preview: %.*s", 
+                          (int)response->header.msg_length, response->payload);
+        }
+        else
+        {
+            LOG_DEBUG_CTX(0, client_fd, "[NETWORK] Payload preview: %.100s...", response->payload);
         }
     }
+    else
+    {
+        LOG_DEBUG_CTX(0, client_fd, "[NETWORK] No payload in response (msg_length=0)");
+    }
     
+    LOG_INFO_CTX(0, client_fd, "[NETWORK] Response sent successfully: type=0x%04X, total_bytes=%zu", 
+                 response->header.msg_type, sizeof(MessageHeader) + response->header.msg_length);
     return 0;
 }
 
@@ -228,10 +368,12 @@ static int handle_auth_request(int client_fd, Message *request, Message *respons
         {
             // Success response with user_id
             uint32_t user_id = new_user.user_id;
+            LOG_INFO_CTX((int)user_id, client_fd, "User registered: username='%s'", username);
             create_success_response(response, MSG_REGISTER_RESPONSE, &user_id, sizeof(uint32_t));
         }
         else
         {
+            LOG_WARNING_CTX(0, client_fd, "Registration failed: username='%s', error=%d", username, result);
             create_error_response(response, MSG_REGISTER_REQUEST, result);
         }
         break;
@@ -268,10 +410,12 @@ static int handle_auth_request(int client_fd, Message *request, Message *respons
             // Format: "session_token:user_id"
             char login_data[128];
             snprintf(login_data, sizeof(login_data), "%s:%u", session.session_token, session.user_id);
+            LOG_INFO_CTX((int)session.user_id, client_fd, "User logged in: username='%s'", username);
             create_success_response(response, MSG_LOGIN_RESPONSE, login_data, strlen(login_data));
         }
         else
         {
+            LOG_WARNING_CTX(0, client_fd, "Login failed: username='%s', error=%d", username, result);
             create_error_response(response, MSG_LOGIN_REQUEST, result);
         }
         break;
@@ -331,6 +475,8 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
         int result = buy_from_market((int)user_id, (int)listing_id);
         if (result == 0)
         {
+            LOG_INFO_CTX((int)user_id, client_fd, "Market purchase successful: user_id=%d, listing_id=%d", 
+                         (int)user_id, (int)listing_id);
             create_success_response(response, MSG_BUY_FROM_MARKET, NULL, 0);
         }
         else
@@ -352,6 +498,8 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
             else
                 error_code = ERR_DATABASE_ERROR;
             
+            LOG_WARNING_CTX((int)user_id, client_fd, "Market purchase failed: user_id=%d, listing_id=%d, error=%d", 
+                            (int)user_id, (int)listing_id, result);
             create_error_response(response, MSG_BUY_FROM_MARKET, error_code);
         }
         break;
@@ -371,6 +519,8 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
         int result = list_skin_on_market((int)user_id, (int)instance_id, price);
         if (result == 0)
         {
+            LOG_INFO_CTX((int)user_id, client_fd, "Market listing created: user_id=%d, instance_id=%d, price=%.2f", 
+                         (int)user_id, (int)instance_id, price);
             create_success_response(response, MSG_SELL_TO_MARKET, NULL, 0);
         }
         else
@@ -392,6 +542,8 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
             else if (result == -7)
                 error_code = ERR_INVALID_TRADE; // Item is in a pending trade
             
+            LOG_WARNING_CTX((int)user_id, client_fd, "Market listing failed: user_id=%d, instance_id=%d, price=%.2f, error=%d", 
+                            (int)user_id, (int)instance_id, price, result);
             create_error_response(response, MSG_SELL_TO_MARKET, error_code);
         }
         break;
@@ -519,6 +671,35 @@ static int handle_market_request(int client_fd, Message *request, Message *respo
         {
             // No trend data available
             create_error_response(response, MSG_GET_PRICE_TREND, ERR_ITEM_NOT_FOUND);
+        }
+        break;
+    }
+    
+    case MSG_GET_MARKET_HISTORY:
+    {
+        // Parse: user_id
+        uint32_t user_id;
+        if (sscanf((char *)request->payload, "%u", &user_id) != 1)
+        {
+            create_error_response(response, MSG_GET_MARKET_HISTORY, ERR_INVALID_REQUEST);
+            return send_response(client_fd, response);
+        }
+        
+        MarketListing listings[100];
+        int count = 0;
+        int result = get_user_listing_history((int)user_id, listings, &count);
+        
+        if (result == 0 && count > 0)
+        {
+            // Send listing history data
+            create_success_response(response, MSG_MARKET_HISTORY_DATA, listings, sizeof(MarketListing) * count);
+            response->header.msg_length = sizeof(MarketListing) * count;
+            LOG_INFO_CTX((int)user_id, client_fd, "Market history loaded: user_id=%d, count=%d", (int)user_id, count);
+        }
+        else
+        {
+            // No listings found
+            create_success_response(response, MSG_MARKET_HISTORY_DATA, NULL, 0);
         }
         break;
     }
@@ -955,13 +1136,62 @@ static int handle_quests_request(int client_fd, Message *request, Message *respo
             return send_response(client_fd, response);
         }
         
-        if (claim_quest_reward((int)user_id, (int)quest_id) == 0)
+        // Get quest to calculate reward before claiming
+        Quest quests[10];
+        int count = 0;
+        float reward_amount = 0.0f;
+        if (get_user_quests((int)user_id, quests, &count) == 0)
         {
-            create_success_response(response, MSG_CLAIM_QUEST_REWARD, NULL, 0);
+            for (int i = 0; i < count; i++)
+            {
+                if (quests[i].quest_id == (int)quest_id)
+                {
+                    // Calculate reward amount
+                    switch (quests[i].quest_type)
+                    {
+                    case QUEST_FIRST_STEPS:
+                        reward_amount = QUEST_REWARD_FIRST_STEPS;
+                        break;
+                    case QUEST_MARKET_EXPLORER:
+                        reward_amount = QUEST_REWARD_MARKET_EXPLORER;
+                        break;
+                    case QUEST_LUCKY_GAMBLER:
+                        reward_amount = QUEST_REWARD_LUCKY_GAMBLER;
+                        break;
+                    case QUEST_PROFIT_MAKER:
+                        reward_amount = QUEST_REWARD_PROFIT_MAKER;
+                        break;
+                    case QUEST_SOCIAL_TRADER:
+                        reward_amount = QUEST_REWARD_SOCIAL_TRADER;
+                        break;
+                    }
+                    break;
+                }
+            }
+        }
+        
+        int result = claim_quest_reward((int)user_id, (int)quest_id);
+        if (result == 0)
+        {
+            // Return reward amount in response
+            char reward_data[32];
+            snprintf(reward_data, sizeof(reward_data), "%.2f", reward_amount);
+            create_success_response(response, MSG_CLAIM_QUEST_REWARD, reward_data, strlen(reward_data));
+            LOG_INFO_CTX((int)user_id, client_fd, "Quest reward claimed: quest_id=%d, reward=$%.2f", 
+                         (int)quest_id, reward_amount);
         }
         else
         {
-            create_error_response(response, MSG_CLAIM_QUEST_REWARD, ERR_INVALID_REQUEST);
+            uint32_t error_code = ERR_INVALID_REQUEST;
+            if (result == -2)
+                error_code = ERR_INVALID_REQUEST; // Not completed
+            else if (result == -3)
+                error_code = ERR_INVALID_REQUEST; // Already claimed
+            else
+                error_code = ERR_DATABASE_ERROR;
+            LOG_WARNING_CTX((int)user_id, client_fd, "Quest reward claim failed: quest_id=%d, error=%d", 
+                            (int)quest_id, result);
+            create_error_response(response, MSG_CLAIM_QUEST_REWARD, error_code);
         }
         break;
     }
@@ -1226,6 +1456,8 @@ static int handle_leaderboards_request(int client_fd, Message *request, Message 
 // Handle trade analytics messages
 static int handle_trade_analytics_request(int client_fd, Message *request, Message *response)
 {
+    LOG_DEBUG_CTX(0, client_fd, "handle_trade_analytics_request: msg_type=0x%04X", request->header.msg_type);
+    
     switch (request->header.msg_type)
     {
     case MSG_GET_TRADE_HISTORY:
@@ -1235,23 +1467,30 @@ static int handle_trade_analytics_request(int client_fd, Message *request, Messa
         int limit = 50;
         if (sscanf((char *)request->payload, "%u:%d", &user_id, &limit) < 1)
         {
+            LOG_ERROR_CTX(0, client_fd, "MSG_GET_TRADE_HISTORY: failed to parse user_id:limit from payload='%s'", request->payload);
             create_error_response(response, MSG_GET_TRADE_HISTORY, ERR_INVALID_REQUEST);
             return send_response(client_fd, response);
         }
         if (limit <= 0 || limit > 100)
             limit = 50;
         
+        LOG_DEBUG_CTX((int)user_id, client_fd, "MSG_GET_TRADE_HISTORY: user_id=%u, limit=%d", user_id, limit);
+        
         TransactionLog logs[100];
         int count = 0;
         int result = get_trade_history((int)user_id, logs, &count, limit);
         
+        LOG_DEBUG_CTX((int)user_id, client_fd, "MSG_GET_TRADE_HISTORY: get_trade_history returned result=%d, count=%d", result, count);
+        
         if (result == 0 && count > 0)
         {
+            LOG_DEBUG_CTX((int)user_id, client_fd, "MSG_GET_TRADE_HISTORY: returning %d logs", count);
             create_success_response(response, MSG_TRADE_HISTORY_DATA, logs, sizeof(TransactionLog) * count);
             response->header.msg_length = sizeof(TransactionLog) * count;
         }
         else
         {
+            LOG_DEBUG_CTX((int)user_id, client_fd, "MSG_GET_TRADE_HISTORY: no logs found (result=%d, count=%d)", result, count);
             create_success_response(response, MSG_TRADE_HISTORY_DATA, NULL, 0);
         }
         break;
@@ -1289,23 +1528,30 @@ static int handle_trade_analytics_request(int client_fd, Message *request, Messa
         int days = 7;
         if (sscanf((char *)request->payload, "%u:%d", &user_id, &days) < 1)
         {
+            LOG_ERROR_CTX(0, client_fd, "MSG_GET_BALANCE_HISTORY: failed to parse user_id:days from payload='%s'", request->payload);
             create_error_response(response, MSG_GET_BALANCE_HISTORY, ERR_INVALID_REQUEST);
             return send_response(client_fd, response);
         }
         if (days <= 0 || days > 30)
             days = 7;
         
+        LOG_DEBUG_CTX((int)user_id, client_fd, "MSG_GET_BALANCE_HISTORY: user_id=%u, days=%d", user_id, days);
+        
         BalanceHistoryEntry history[30];
         int count = 0;
         int result = get_balance_history((int)user_id, history, &count, days);
         
+        LOG_DEBUG_CTX((int)user_id, client_fd, "MSG_GET_BALANCE_HISTORY: get_balance_history returned result=%d, count=%d", result, count);
+        
         if (result == 0 && count > 0)
         {
+            LOG_DEBUG_CTX((int)user_id, client_fd, "MSG_GET_BALANCE_HISTORY: returning %d history entries", count);
             create_success_response(response, MSG_BALANCE_HISTORY_DATA, history, sizeof(BalanceHistoryEntry) * count);
             response->header.msg_length = sizeof(BalanceHistoryEntry) * count;
         }
         else
         {
+            LOG_DEBUG_CTX((int)user_id, client_fd, "MSG_GET_BALANCE_HISTORY: no history found (result=%d, count=%d)", result, count);
             create_success_response(response, MSG_BALANCE_HISTORY_DATA, NULL, 0);
         }
         break;
@@ -1523,11 +1769,34 @@ int handle_client_request(int client_fd, Message *request)
     // Route based on message type
     uint16_t msg_type = request->header.msg_type;
     
+    // Extract user_id from request if available (for context logging)
+    int user_id = 0;
+    if (request->header.msg_length > 0)
+    {
+        // Try to parse user_id from common request formats
+        if (msg_type == MSG_GET_INVENTORY || msg_type == MSG_GET_TRADES || 
+            msg_type == MSG_SEND_TRADE_OFFER || msg_type == MSG_ACCEPT_TRADE ||
+            msg_type == MSG_DECLINE_TRADE || msg_type == MSG_CANCEL_TRADE)
+        {
+            sscanf((char *)request->payload, "%d", &user_id);
+        }
+        else if (msg_type == MSG_BUY_FROM_MARKET || msg_type == MSG_SELL_TO_MARKET || 
+                 msg_type == MSG_REMOVE_FROM_MARKET)
+        {
+            uint32_t u32_user_id;
+            if (sscanf((char *)request->payload, "%u", &u32_user_id) == 1)
+                user_id = (int)u32_user_id;
+        }
+    }
+    
+    LOG_DEBUG_CTX(user_id, client_fd, "Handling request: msg_type=0x%04X, length=%d", 
+                  msg_type, request->header.msg_length);
+    
     if (msg_type >= MSG_REGISTER_REQUEST && msg_type <= MSG_LOGOUT)
     {
         handle_auth_request(client_fd, request, &response);
     }
-    else if (msg_type >= MSG_GET_MARKET_LISTINGS && msg_type <= MSG_PRICE_TREND_DATA)
+    else if (msg_type >= MSG_GET_MARKET_LISTINGS && msg_type <= MSG_MARKET_HISTORY_DATA)
     {
         handle_market_request(client_fd, request, &response);
     }
@@ -1539,11 +1808,8 @@ int handle_client_request(int client_fd, Message *request)
     {
         handle_inventory_request(client_fd, request, &response);
     }
-    // Check leaderboards and unbox messages - handle overlaps explicitly
-    // MSG_GET_TOP_TRADERS (0x0040) == MSG_UNBOX_CASE (0x0040) - overlap!
-    // MSG_GET_LUCKIEST_UNBOXERS (0x0042) == MSG_GET_CASES (0x0042) - overlap!
-    // MSG_LUCKIEST_UNBOXERS_DATA (0x0043) == MSG_CASES_DATA (0x0043) - overlap!
-    // Need to check unbox messages FIRST (before leaderboards) to handle overlaps correctly
+    // Check unbox messages (0x0080-0x0083) - must check before leaderboards (0x0040-0x0045)
+    // to avoid range conflicts, even though there's no actual overlap anymore
     else if (msg_type == MSG_UNBOX_CASE || msg_type == MSG_UNBOX_RESULT || 
              msg_type == MSG_GET_CASES || msg_type == MSG_CASES_DATA)
     {
@@ -1565,6 +1831,8 @@ int handle_client_request(int client_fd, Message *request)
     }
     else if (msg_type >= MSG_GET_TRADE_HISTORY && msg_type <= MSG_BALANCE_HISTORY_DATA)
     {
+        LOG_DEBUG_CTX(user_id, client_fd, "Routing to handle_trade_analytics_request: msg_type=0x%04X (MSG_GET_TRADE_HISTORY=0x%04X, MSG_BALANCE_HISTORY_DATA=0x%04X)", 
+                      msg_type, MSG_GET_TRADE_HISTORY, MSG_BALANCE_HISTORY_DATA);
         handle_trade_analytics_request(client_fd, request, &response);
     }
     else if (msg_type >= MSG_CREATE_CHALLENGE && msg_type <= MSG_CANCEL_CHALLENGE_RESPONSE)

@@ -20,6 +20,9 @@
 // Initialize daily quests for user
 int init_daily_quests(int user_id);
 
+// Check and reset daily quests if needed (after 24 hours)
+int check_and_reset_daily_quests(int user_id);
+
 // Get user's active quests
 int get_user_quests(int user_id, Quest *out_quests, int *count);
 

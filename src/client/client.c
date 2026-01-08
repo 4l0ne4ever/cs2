@@ -6,385 +6,22 @@
 #include "../include/types.h"
 #include "../include/utils.h"
 #include "../include/trading_challenges.h"
+#include "../include/logger.h"
+#include "../include/client_auth.h"
+#include "../include/client_common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
 
-static int g_user_id = -1;
-static char g_session_token[37] = {0};
+// Global state and helper functions defined in client_helpers.c
 
-// Helper function to get definition_id from instance_id
-static int get_definition_id_from_instance(int instance_id, int *out_definition_id)
-{
-    if (!out_definition_id || instance_id <= 0)
-        return -1;
-
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_GET_DEFINITION_ID;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", instance_id);
-    request.header.msg_length = strlen(request.payload);
-
-    if (send_message_to_server(&request) != 0)
-        return -1;
-
-    if (receive_message_from_server(&response) != 0)
-        return -1;
-
-    if (response.header.msg_type == MSG_DEFINITION_ID_DATA)
-    {
-        memcpy(out_definition_id, response.payload, sizeof(int));
-        return 0;
-    }
-    else if (response.header.msg_type == MSG_ERROR)
-    {
-        return -1;
-    }
-
-    return -1;
-}
-
-// Helper function to get price trend for a skin definition
-static int get_price_trend(int definition_id, PriceTrend *out_trend)
-{
-    if (!out_trend || definition_id <= 0)
-        return -1;
-
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_GET_PRICE_TREND;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", definition_id);
-    request.header.msg_length = strlen(request.payload);
-
-    if (send_message_to_server(&request) != 0)
-        return -1;
-
-    if (receive_message_from_server(&response) != 0)
-        return -1;
-
-    if (response.header.msg_type == MSG_PRICE_TREND_DATA)
-    {
-        memcpy(out_trend, response.payload, sizeof(PriceTrend));
-        return 0;
-    }
-    else if (response.header.msg_type == MSG_ERROR)
-    {
-        return -1;
-    }
-
-    return -1;
-}
-
-// Helper function to get price history for a skin definition
-static int get_price_history(int definition_id, PriceHistoryEntry *out_history, int *count)
-{
-    if (!out_history || !count || definition_id <= 0)
-        return -1;
-
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_GET_PRICE_HISTORY;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", definition_id);
-    request.header.msg_length = strlen(request.payload);
-
-    if (send_message_to_server(&request) != 0)
-        return -1;
-
-    if (receive_message_from_server(&response) != 0)
-        return -1;
-
-    if (response.header.msg_type == MSG_PRICE_HISTORY_DATA)
-    {
-        int history_count = response.header.msg_length / sizeof(PriceHistoryEntry);
-        if (history_count > 100)
-            history_count = 100;
-
-        memcpy(out_history, response.payload, sizeof(PriceHistoryEntry) * history_count);
-        *count = history_count;
-        return 0;
-    }
-    else if (response.header.msg_type == MSG_ERROR)
-    {
-        *count = 0;
-        return -1;
-    }
-
-    *count = 0;
-    return -1;
-}
-
-// Helper function to load full skin details from server
-static int load_skin_details(int instance_id, Skin *out_skin)
-{
-    if (!out_skin)
-        return -1;
-
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_GET_SKIN_DETAILS;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", instance_id);
-    request.header.msg_length = strlen(request.payload);
-
-    if (send_message_to_server(&request) != 0)
-        return -1;
-
-    if (receive_message_from_server(&response) != 0)
-        return -1;
-
-    if (response.header.msg_type == MSG_SKIN_DETAILS_DATA)
-    {
-        if (response.header.msg_length >= sizeof(Skin))
-        {
-            memcpy(out_skin, response.payload, sizeof(Skin));
-            return 0;
-        }
-    }
-
-    return -1;
-}
-
-// Helper function to get user balance and calculate total inventory value
-static float get_user_balance()
-{
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_GET_USER_PROFILE;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
-    request.header.msg_length = strlen(request.payload);
-
-    if (send_message_to_server(&request) == 0 && receive_message_from_server(&response) == 0)
-    {
-        if (response.header.msg_type == MSG_USER_PROFILE_DATA)
-        {
-            User user;
-            memcpy(&user, response.payload, sizeof(User));
-            return user.balance;
-        }
-    }
-    return 0.0f;
-}
-
-// Helper function to calculate total inventory value
-static float calculate_inventory_value()
-{
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_GET_INVENTORY;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
-    request.header.msg_length = strlen(request.payload);
-
-    if (send_message_to_server(&request) != 0)
-        return 0.0f;
-
-    if (receive_message_from_server(&response) != 0)
-        return 0.0f;
-
-    if (response.header.msg_type == MSG_INVENTORY_DATA)
-    {
-        Inventory inv;
-        memcpy(&inv, response.payload, sizeof(Inventory));
-
-        float total_value = 0.0f;
-        for (int i = 0; i < inv.count && i < MAX_INVENTORY_SIZE; i++)
-        {
-            Skin skin;
-            if (load_skin_details(inv.skin_ids[i], &skin) == 0)
-            {
-                total_value += skin.current_price;
-            }
-        }
-        return total_value;
-    }
-    return 0.0f;
-}
-
-// Helper function to display balance info at top of screen
-static void display_balance_info()
-{
-    float balance = get_user_balance();
-    float inv_value = calculate_inventory_value();
-    float total = balance + inv_value;
-
-    move_cursor(1, 1);
-    printf("Balance: %s$%.2f%s | Inventory Value: %s$%.2f%s | Total: %s$%.2f%s\n",
-           COLOR_GREEN, balance, COLOR_RESET,
-           COLOR_YELLOW, inv_value, COLOR_RESET,
-           COLOR_BRIGHT_GREEN, total, COLOR_RESET);
-    fflush(stdout);
-}
-
-// Helper function to search user by username
-static int search_user_by_username(const char *username, User *out_user)
-{
-    if (!username || !out_user)
-        return -1;
-
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_SEARCH_USER_BY_USERNAME;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%s", username);
-    request.header.msg_length = strlen(request.payload);
-
-    if (send_message_to_server(&request) != 0)
-        return -1;
-
-    if (receive_message_from_server(&response) != 0)
-        return -1;
-
-    if (response.header.msg_type == MSG_SEARCH_USER_RESPONSE)
-    {
-        if (response.header.msg_length >= sizeof(User))
-        {
-            memcpy(out_user, response.payload, sizeof(User));
-            return 0;
-        }
-    }
-    else if (response.header.msg_type == MSG_ERROR)
-    {
-        uint32_t error_code;
-        memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
-        return (int)error_code;
-    }
-
-    return -1;
-}
-
-// Forward declaration
+// Forward declarations
 static void send_trade_offer_ui(int to_user_id, const char *to_username);
+void show_market_history();
 
-// Authentication functions
-int handle_login(const char *username, const char *password)
-{
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_LOGIN_REQUEST;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%s:%s", username, password);
-    request.header.msg_length = strlen(request.payload);
-
-    if (send_message_to_server(&request) != 0)
-    {
-        print_error("Failed to send login request");
-        return -1;
-    }
-
-    if (receive_message_from_server(&response) != 0)
-    {
-        print_error("Failed to receive login response");
-        return -1;
-    }
-
-    if (response.header.msg_type == MSG_LOGIN_RESPONSE)
-    {
-        // Parse: "session_token:user_id"
-        char payload_copy[MAX_PAYLOAD_SIZE + 1];
-        size_t payload_len = response.header.msg_length;
-        if (payload_len >= sizeof(payload_copy))
-            payload_len = sizeof(payload_copy) - 1;
-        memcpy(payload_copy, response.payload, payload_len);
-        payload_copy[payload_len] = '\0';
-        
-        char *colon = strchr(payload_copy, ':');
-        if (colon)
-        {
-            *colon = '\0';
-            strncpy(g_session_token, payload_copy, sizeof(g_session_token) - 1);
-            g_session_token[sizeof(g_session_token) - 1] = '\0';
-            g_user_id = atoi(colon + 1);
-        }
-        else
-        {
-            // Fallback: old format (just session token)
-            strncpy(g_session_token, (char *)response.payload, sizeof(g_session_token) - 1);
-            g_session_token[sizeof(g_session_token) - 1] = '\0';
-        }
-        return 0;
-    }
-    else if (response.header.msg_type == MSG_ERROR)
-    {
-        uint32_t error_code;
-        memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
-        if (error_code == ERR_INVALID_CREDENTIALS)
-            print_error("Invalid username or password");
-        else
-            print_error("Login failed");
-        return -1;
-    }
-
-    return -1;
-}
-
-int handle_register(const char *username, const char *password)
-{
-    Message request, response;
-    memset(&request, 0, sizeof(Message));
-    memset(&response, 0, sizeof(Message));
-
-    request.header.magic = 0xABCD;
-    request.header.msg_type = MSG_REGISTER_REQUEST;
-    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%s:%s", username, password);
-    request.header.msg_length = strlen(request.payload);
-
-    int send_result = send_message_to_server(&request);
-
-    if (send_result != 0)
-    {
-        print_error("Failed to send register request");
-        return -1;
-    }
-
-    int recv_result = receive_message_from_server(&response);
-
-    if (recv_result != 0)
-    {
-        print_error("Failed to receive register response");
-        return -1;
-    }
-
-    if (response.header.msg_type == MSG_REGISTER_RESPONSE)
-    {
-        memcpy(&g_user_id, response.payload, sizeof(uint32_t));
-        print_success("Registration successful!");
-        return 0;
-    }
-    else if (response.header.msg_type == MSG_ERROR)
-    {
-        uint32_t error_code;
-        memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
-        if (error_code == ERR_USER_EXISTS)
-            print_error("Username already exists");
-        else
-            print_error("Registration failed");
-        return -1;
-    }
-
-    return -1;
-}
+// Authentication functions moved to client_auth.c
 
 // Menu functions
 void show_main_menu()
@@ -700,6 +337,7 @@ void show_market()
                 printf("  %sR<number>%s - Remove your listing (e.g., R1)\n", COLOR_YELLOW, COLOR_RESET);
                 printf("  %sS%s - Search by name\n", COLOR_CYAN, COLOR_RESET);
                 printf("  %sC%s - Clear search\n", COLOR_CYAN, COLOR_RESET);
+                printf("  %sH%s - View your listing history\n", COLOR_CYAN, COLOR_RESET);
                 printf("  %s0%s - Back to main menu\n", COLOR_DIM, COLOR_RESET);
                 printf("\nSelect option: ");
                 fflush(stdout);
@@ -747,6 +385,12 @@ void show_market()
                     // Clear search
                     search_filter[0] = '\0';
                     // Loop will continue and show all listings
+                }
+                else if (choice[0] == 'H' || choice[0] == 'h')
+                {
+                    // Show market history
+                    show_market_history();
+                    // Loop will continue and show market again
                 }
                 else if (choice[0] == 'V' || choice[0] == 'v')
                 {
@@ -1268,6 +912,128 @@ void show_unbox()
             break;
         }
     } // End while loop
+}
+
+// Show market history (user's listing history)
+void show_market_history()
+{
+    clear_screen();
+    print_header("MY LISTING HISTORY");
+    display_balance_info();
+
+    Message request, response;
+    memset(&request, 0, sizeof(Message));
+    memset(&response, 0, sizeof(Message));
+
+    request.header.magic = 0xABCD;
+    request.header.msg_type = MSG_GET_MARKET_HISTORY;
+    snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
+    request.header.msg_length = strlen(request.payload);
+
+    if (send_message_to_server(&request) != 0)
+    {
+        print_error("Failed to request market history");
+        wait_for_key();
+        return;
+    }
+
+    if (receive_message_from_server(&response) != 0)
+    {
+        print_error("Failed to receive market history");
+        wait_for_key();
+        return;
+    }
+
+    if (response.header.msg_type == MSG_MARKET_HISTORY_DATA)
+    {
+        MarketListing listings[100];
+        int count = response.header.msg_length / sizeof(MarketListing);
+        if (count > 100)
+            count = 100;
+
+        if (count > 0)
+        {
+            memcpy(listings, response.payload, count * sizeof(MarketListing));
+
+            printf("\nYour Listing History (%d items):\n\n", count);
+
+            // Load skin details for each listing
+            Skin skins[100];
+            int valid_count = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                if (load_skin_details(listings[i].skin_id, &skins[valid_count]) == 0)
+                {
+                    valid_count++;
+                }
+            }
+
+            // Display listings with status
+            for (int i = 0; i < valid_count; i++)
+            {
+                const char *rarity_color = get_rarity_color(skins[i].rarity);
+                const char *wear = wear_to_string(skins[i].wear);
+                const char *status_color = listings[i].is_sold ? COLOR_BRIGHT_GREEN : COLOR_YELLOW;
+                const char *status_text = listings[i].is_sold ? "SOLD" : "LISTED";
+
+                printf("%s[%2d]%s ", COLOR_CYAN, i + 1, COLOR_RESET);
+                printf("%s[%s]%s ", rarity_color, rarity_to_string(skins[i].rarity), COLOR_RESET);
+                if (skins[i].is_stattrak)
+                    printf("%sStatTrak™ %s", COLOR_BRIGHT_GREEN, COLOR_RESET);
+                printf("%s", skins[i].name);
+                printf(" %s(%s, Pattern #%d)%s", COLOR_DIM, wear, skins[i].pattern_seed, COLOR_RESET);
+                printf(" - %s$%.2f%s", COLOR_BRIGHT_GREEN, listings[i].price, COLOR_RESET);
+                printf(" %s[%s]%s", status_color, status_text, COLOR_RESET);
+
+                // Show listing date
+                time_t listed_time = listings[i].listed_at;
+                struct tm *time_info = localtime(&listed_time);
+                char time_str[32];
+                strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M", time_info);
+                printf(" %s(%s)%s\n", COLOR_DIM, time_str, COLOR_RESET);
+            }
+
+            // Summary
+            int sold_count = 0;
+            int listed_count = 0;
+            float total_sold = 0.0f;
+            for (int i = 0; i < count; i++)
+            {
+                if (listings[i].is_sold)
+                {
+                    sold_count++;
+                    total_sold += listings[i].price;
+                }
+                else
+                {
+                    listed_count++;
+                }
+            }
+
+            printf("\n");
+            print_separator(50);
+            printf("Summary:\n");
+            printf("  Total Listings: %d\n", count);
+            printf("  %sSold: %d%s\n", COLOR_BRIGHT_GREEN, sold_count, COLOR_RESET);
+            printf("  %sActive: %d%s\n", COLOR_YELLOW, listed_count, COLOR_RESET);
+            if (sold_count > 0)
+            {
+                printf("  Total Revenue: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, total_sold, COLOR_RESET);
+            }
+        }
+        else
+        {
+            print_info("No listing history found");
+        }
+    }
+    else
+    {
+        print_error("Failed to load market history");
+    }
+
+    printf("\nPress Enter to continue...");
+    wait_for_key();
 }
 
 // Show leaderboards
@@ -2418,17 +2184,43 @@ static void send_trade_offer_ui(int to_user_id, const char *to_username)
 
     // Parse requested item numbers
     char *token = strtok(request_items_input, ",\n ");
+    int invalid_requested_items = 0;
     while (token != NULL && offer.requested_count < 10)
     {
         int item_num = atoi(token);
+        if (item_num == 0)
+        {
+            // Skip 0 (user wants to skip)
+            token = strtok(NULL, ",\n ");
+            continue;
+        }
         if (item_num > 0 && item_num <= opp_valid_count)
         {
             int idx = item_num - 1;
-            // Note: Trade lock check removed - items are only locked when listed on market
-            // Trading between users does not require items to be unlocked
-            offer.requested_skins[offer.requested_count++] = opp_instance_ids[idx];
+            int instance_id = opp_instance_ids[idx];
+            if (instance_id > 0)
+            {
+                // Note: Trade lock check removed - items are only locked when listed on market
+                // Trading between users does not require items to be unlocked
+                offer.requested_skins[offer.requested_count++] = instance_id;
+            }
+            else
+            {
+                invalid_requested_items++;
+            }
+        }
+        else
+        {
+            invalid_requested_items++;
         }
         token = strtok(NULL, ",\n ");
+    }
+    
+    if (invalid_requested_items > 0)
+    {
+        print_error("Some requested items are invalid or not in opponent's inventory");
+        wait_for_key();
+        return;
     }
 
     // Step 2: Select items to OFFER from your inventory
@@ -2439,13 +2231,13 @@ static void send_trade_offer_ui(int to_user_id, const char *to_username)
         const char *rarity_color = get_rarity_color(skins[i].rarity);
         const char *stattrak = skins[i].is_stattrak ? "StatTrak™ " : "";
         const char *wear = wear_to_string(skins[i].wear);
-        // Note: Items are NOT trade locked when creating offer, only after trade completes
+        const char *tradable = skins[i].is_tradable ? "" : COLOR_RED " [TRADE LOCKED]" COLOR_RESET;
 
-        printf("%d. %s[%s]%s %s%s%s%s (%s, Pattern #%d) - $%.2f\n",
+        printf("%d. %s[%s]%s %s%s%s%s (%s, Pattern #%d) - $%.2f%s\n",
                i + 1,
                rarity_color, rarity_to_string(skins[i].rarity), COLOR_RESET,
                skins[i].is_stattrak ? COLOR_BRIGHT_GREEN : "", stattrak, COLOR_RESET,
-               skins[i].name, wear, skins[i].pattern_seed, skins[i].current_price);
+               skins[i].name, wear, skins[i].pattern_seed, skins[i].current_price, tradable);
     }
 
     printf("\nEnter item numbers to OFFER (comma-separated, e.g., 1,3,5 or 0 to skip): ");
@@ -2457,15 +2249,59 @@ static void send_trade_offer_ui(int to_user_id, const char *to_username)
 
     // Parse offered item numbers
     token = strtok(offer_items_input, ",\n ");
+    int invalid_offered_items = 0;
+    int locked_items = 0;
     while (token != NULL && offer.offered_count < 10)
     {
         int item_num = atoi(token);
+        if (item_num == 0)
+        {
+            // Skip 0 (user wants to skip)
+            token = strtok(NULL, ",\n ");
+            continue;
+        }
         if (item_num > 0 && item_num <= valid_count)
         {
             int idx = item_num - 1;
-            offer.offered_skins[offer.offered_count++] = instance_ids[idx];
+            int instance_id = instance_ids[idx];
+            if (instance_id > 0)
+            {
+                // Check if item is trade locked
+                if (!skins[idx].is_tradable)
+                {
+                    locked_items++;
+                    printf("Warning: Item #%d (%s) is trade locked and cannot be offered\n", 
+                           item_num, skins[idx].name);
+                }
+                else
+                {
+                    offer.offered_skins[offer.offered_count++] = instance_id;
+                }
+            }
+            else
+            {
+                invalid_offered_items++;
+            }
+        }
+        else
+        {
+            invalid_offered_items++;
         }
         token = strtok(NULL, ",\n ");
+    }
+    
+    if (invalid_offered_items > 0)
+    {
+        print_error("Some offered items are invalid or not in your inventory");
+        wait_for_key();
+        return;
+    }
+    
+    if (locked_items > 0)
+    {
+        print_error("Cannot offer trade locked items. Please select unlocked items only.");
+        wait_for_key();
+        return;
     }
 
     // Validate: must offer something OR request something
@@ -2474,6 +2310,27 @@ static void send_trade_offer_ui(int to_user_id, const char *to_username)
         print_error("You must offer or request at least one item");
         wait_for_key();
         return;
+    }
+
+    // Validate instance_ids are valid (not 0)
+    for (int i = 0; i < offer.requested_count; i++)
+    {
+        if (offer.requested_skins[i] <= 0)
+        {
+            print_error("Invalid requested item detected. Please try again.");
+            wait_for_key();
+            return;
+        }
+    }
+    
+    for (int i = 0; i < offer.offered_count; i++)
+    {
+        if (offer.offered_skins[i] <= 0)
+        {
+            print_error("Invalid offered item detected. Please try again.");
+            wait_for_key();
+            return;
+        }
     }
 
     // Debug: Print trade offer details
@@ -2568,27 +2425,158 @@ void show_trading()
                 printf("\nYour Trade Offers:\n\n");
 
                 int pending_count = 0;
-                for (int i = 0; i < count; i++)
+                int completed_count = 0;
+                
+                if (count == 0)
                 {
-                    if (trades[i].status == TRADE_PENDING)
+                    printf("No trade offers found.\n\n");
+                }
+                else
+                {
+                    // Display pending trades first (numbered 1, 2, 3...)
+                    for (int i = 0; i < count; i++)
                     {
-                        pending_count++;
-                        printf("%d. Trade #%d: ", pending_count, trades[i].trade_id);
-                        if (trades[i].to_user_id == g_user_id)
+                        if (trades[i].status == TRADE_PENDING)
                         {
-                            printf("From User %d -> You\n", trades[i].from_user_id);
-                            printf("   Offered: %d skins, $%.2f\n", trades[i].offered_count, trades[i].offered_cash);
-                            printf("   Requested: %d skins, $%.2f\n", trades[i].requested_count, trades[i].requested_cash);
-                            printf("   [A]ccept [D]ecline\n");
+                            pending_count++;
+                            printf("%d. Trade #%d: ", pending_count, trades[i].trade_id);
+                            if (trades[i].to_user_id == g_user_id)
+                            {
+                                printf("From User %d -> You\n", trades[i].from_user_id);
+                            }
+                            else
+                            {
+                                printf("You -> User %d\n", trades[i].to_user_id);
+                            }
+                            
+                            // Display offered items details
+                            if (trades[i].offered_count > 0)
+                            {
+                                printf("   Offering %d item(s):\n", trades[i].offered_count);
+                                for (int j = 0; j < trades[i].offered_count && j < 10; j++)
+                                {
+                                    Skin skin;
+                                    if (load_skin_details(trades[i].offered_skins[j], &skin) == 0)
+                                    {
+                                        const char *rarity_color = get_rarity_color(skin.rarity);
+                                        const char *stattrak = skin.is_stattrak ? "StatTrak™ " : "";
+                                        const char *wear = wear_to_string(skin.wear);
+                                        printf("     - %s[%s]%s %s%s%s%s (%s, Pattern #%d) - $%.2f\n",
+                                               rarity_color, rarity_to_string(skin.rarity), COLOR_RESET,
+                                               skin.is_stattrak ? COLOR_BRIGHT_GREEN : "", stattrak, COLOR_RESET,
+                                               skin.name, wear, skin.pattern_seed, skin.current_price);
+                                    }
+                                    else
+                                    {
+                                        printf("     - Item #%d (details unavailable)\n", trades[i].offered_skins[j]);
+                                    }
+                                }
+                            }
+                            if (trades[i].offered_cash > 0)
+                            {
+                                printf("   + $%.2f cash\n", trades[i].offered_cash);
+                            }
+                            
+                            // Display requested items details
+                            if (trades[i].requested_count > 0)
+                            {
+                                printf("   Requesting %d item(s):\n", trades[i].requested_count);
+                                for (int j = 0; j < trades[i].requested_count && j < 10; j++)
+                                {
+                                    Skin skin;
+                                    if (load_skin_details(trades[i].requested_skins[j], &skin) == 0)
+                                    {
+                                        const char *rarity_color = get_rarity_color(skin.rarity);
+                                        const char *stattrak = skin.is_stattrak ? "StatTrak™ " : "";
+                                        const char *wear = wear_to_string(skin.wear);
+                                        printf("     - %s[%s]%s %s%s%s%s (%s, Pattern #%d) - $%.2f\n",
+                                               rarity_color, rarity_to_string(skin.rarity), COLOR_RESET,
+                                               skin.is_stattrak ? COLOR_BRIGHT_GREEN : "", stattrak, COLOR_RESET,
+                                               skin.name, wear, skin.pattern_seed, skin.current_price);
+                                    }
+                                    else
+                                    {
+                                        printf("     - Item #%d (details unavailable)\n", trades[i].requested_skins[j]);
+                                    }
+                                }
+                            }
+                            if (trades[i].requested_cash > 0)
+                            {
+                                printf("   + $%.2f cash\n", trades[i].requested_cash);
+                            }
+                            
+                            if (trades[i].to_user_id == g_user_id)
+                            {
+                                printf("   [A]ccept [D]ecline\n");
+                            }
+                            else
+                            {
+                                printf("   [C]ancel\n");
+                            }
+                            printf("\n");
                         }
-                        else
+                    }
+                    
+                    // Display completed/expired trades (for history, not actionable)
+                    for (int i = 0; i < count; i++)
+                    {
+                        if (trades[i].status != TRADE_PENDING)
                         {
-                            printf("You -> User %d\n", trades[i].to_user_id);
-                            printf("   Offered: %d skins, $%.2f\n", trades[i].offered_count, trades[i].offered_cash);
-                            printf("   Requested: %d skins, $%.2f\n", trades[i].requested_count, trades[i].requested_cash);
-                            printf("   [C]ancel\n");
+                            completed_count++;
                         }
-                        printf("\n");
+                    }
+                    
+                    if (completed_count > 0)
+                    {
+                        if (pending_count > 0)
+                        {
+                            printf("--- Completed/Expired Trades (History) ---\n\n");
+                        }
+                        
+                        for (int i = 0; i < count; i++)
+                        {
+                            if (trades[i].status != TRADE_PENDING)
+                            {
+                                const char *status_str = "Unknown";
+                                switch (trades[i].status)
+                                {
+                                    case TRADE_PENDING: status_str = "Pending"; break;
+                                    case TRADE_ACCEPTED: status_str = "Accepted"; break;
+                                    case TRADE_DECLINED: status_str = "Declined"; break;
+                                    case TRADE_CANCELLED: status_str = "Cancelled"; break;
+                                    case TRADE_EXPIRED: status_str = "Expired"; break;
+                                    default: 
+                                    {
+                                        char status_buf[32];
+                                        snprintf(status_buf, sizeof(status_buf), "Status %d", trades[i].status);
+                                        status_str = status_buf;
+                                        break;
+                                    }
+                                }
+                                
+                                printf("Trade #%d: ", trades[i].trade_id);
+                                if (trades[i].to_user_id == g_user_id)
+                                {
+                                    printf("From User %d -> You [%s]\n", trades[i].from_user_id, status_str);
+                                }
+                                else
+                                {
+                                    printf("You -> User %d [%s]\n", trades[i].to_user_id, status_str);
+                                }
+                                printf("   Offered: %d skins, $%.2f\n", trades[i].offered_count, trades[i].offered_cash);
+                                printf("   Requested: %d skins, $%.2f\n", trades[i].requested_count, trades[i].requested_cash);
+                                printf("\n");
+                            }
+                        }
+                    }
+                    
+                    if (pending_count == 0 && completed_count == 0)
+                    {
+                        printf("No trade offers found.\n\n");
+                    }
+                    else if (pending_count == 0)
+                    {
+                        printf("No pending trade offers.\n\n");
                     }
                 }
 
@@ -2659,12 +2647,15 @@ void show_trading()
                 }
                 else if (pending_count > 0)
                 {
-                    // Handle trade management
+                    // Handle trade management - user selects trade number (1, 2, 3...)
                     int choice = atoi(input);
                     if (choice > 0 && choice <= pending_count)
                     {
-                        // Find the selected trade
+                        // Find the selected trade by counting pending trades
                         int trade_idx = 0;
+                        int selected_trade_id = -1;
+                        int is_incoming = 0;
+                        
                         for (int i = 0; i < count; i++)
                         {
                             if (trades[i].status == TRADE_PENDING)
@@ -2672,95 +2663,137 @@ void show_trading()
                                 trade_idx++;
                                 if (trade_idx == choice)
                                 {
-                                    if (trades[i].to_user_id == g_user_id)
-                                    {
-                                        // Incoming trade - accept or decline
-                                        printf("Accept (a) or Decline (d): ");
-                                        fflush(stdout);
-                                        char action[32];
-                                        if (fgets(action, sizeof(action), stdin) != NULL)
-                                        {
-                                            if (action[0] == 'a' || action[0] == 'A')
-                                            {
-                                                // Accept trade
-                                                memset(&request, 0, sizeof(Message));
-                                                memset(&response, 0, sizeof(Message));
-                                                request.header.magic = 0xABCD;
-                                                request.header.msg_type = MSG_ACCEPT_TRADE;
-                                                snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, trades[i].trade_id);
-                                                request.header.msg_length = strlen(request.payload);
-
-                                                if (send_message_to_server(&request) == 0)
-                                                {
-                                                    if (receive_message_from_server(&response) == 0)
-                                                    {
-                                                        if (response.header.msg_type == MSG_TRADE_COMPLETED)
-                                                        {
-                                                            print_success("Trade accepted successfully!");
-                                                        }
-                                                        else if (response.header.msg_type == MSG_ERROR)
-                                                        {
-                                                            uint32_t error_code;
-                                                            memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
-                                                            if (error_code == ERR_INSUFFICIENT_FUNDS)
-                                                                print_error("Insufficient funds for trade");
-                                                            else
-                                                                print_error("Failed to accept trade");
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            else if (action[0] == 'd' || action[0] == 'D')
-                                            {
-                                                // Decline trade
-                                                memset(&request, 0, sizeof(Message));
-                                                memset(&response, 0, sizeof(Message));
-                                                request.header.magic = 0xABCD;
-                                                request.header.msg_type = MSG_DECLINE_TRADE;
-                                                snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, trades[i].trade_id);
-                                                request.header.msg_length = strlen(request.payload);
-
-                                                if (send_message_to_server(&request) == 0)
-                                                {
-                                                    if (receive_message_from_server(&response) == 0)
-                                                    {
-                                                        print_success("Trade declined");
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // Outgoing trade - cancel
-                                        printf("Cancel this trade? (y/n): ");
-                                        fflush(stdout);
-                                        char action[32];
-                                        if (fgets(action, sizeof(action), stdin) != NULL)
-                                        {
-                                            if (action[0] == 'y' || action[0] == 'Y')
-                                            {
-                                                memset(&request, 0, sizeof(Message));
-                                                memset(&response, 0, sizeof(Message));
-                                                request.header.magic = 0xABCD;
-                                                request.header.msg_type = MSG_CANCEL_TRADE;
-                                                snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, trades[i].trade_id);
-                                                request.header.msg_length = strlen(request.payload);
-
-                                                if (send_message_to_server(&request) == 0)
-                                                {
-                                                    if (receive_message_from_server(&response) == 0)
-                                                    {
-                                                        print_success("Trade cancelled");
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                    selected_trade_id = trades[i].trade_id;
+                                    is_incoming = (trades[i].to_user_id == g_user_id);
                                     break;
                                 }
                             }
                         }
+                        
+                        if (selected_trade_id > 0)
+                        {
+                            if (is_incoming)
+                            {
+                                // Incoming trade - accept or decline
+                                printf("\nTrade #%d selected.\n", selected_trade_id);
+                                printf("Accept (a) or Decline (d): ");
+                                fflush(stdout);
+                                char action[32];
+                                if (fgets(action, sizeof(action), stdin) != NULL)
+                                {
+                                    if (action[0] == 'a' || action[0] == 'A')
+                                    {
+                                        // Accept trade
+                                        memset(&request, 0, sizeof(Message));
+                                        memset(&response, 0, sizeof(Message));
+                                        request.header.magic = 0xABCD;
+                                        request.header.msg_type = MSG_ACCEPT_TRADE;
+                                        snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, selected_trade_id);
+                                        request.header.msg_length = strlen(request.payload);
+
+                                        if (send_message_to_server(&request) == 0)
+                                        {
+                                            if (receive_message_from_server(&response) == 0)
+                                            {
+                                                if (response.header.msg_type == MSG_TRADE_COMPLETED)
+                                                {
+                                                    print_success("Trade accepted successfully!");
+                                                    sleep(2);
+                                                }
+                                                else if (response.header.msg_type == MSG_ERROR)
+                                                {
+                                                    uint32_t error_code;
+                                                    memcpy(&error_code, response.payload + sizeof(uint16_t), sizeof(uint32_t));
+                                                    if (error_code == ERR_INSUFFICIENT_FUNDS)
+                                                        print_error("Insufficient funds for trade");
+                                                    else if (error_code == ERR_TRADE_EXPIRED || error_code == ERR_INVALID_TRADE)
+                                                        print_error("Items are no longer available");
+                                                    else
+                                                    {
+                                                        char err_msg[128];
+                                                        snprintf(err_msg, sizeof(err_msg), "Failed to accept trade (error: %u)", error_code);
+                                                        print_error(err_msg);
+                                                    }
+                                                    sleep(2);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else if (action[0] == 'd' || action[0] == 'D')
+                                    {
+                                        // Decline trade
+                                        memset(&request, 0, sizeof(Message));
+                                        memset(&response, 0, sizeof(Message));
+                                        request.header.magic = 0xABCD;
+                                        request.header.msg_type = MSG_DECLINE_TRADE;
+                                        snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, selected_trade_id);
+                                        request.header.msg_length = strlen(request.payload);
+
+                                        if (send_message_to_server(&request) == 0)
+                                        {
+                                            if (receive_message_from_server(&response) == 0)
+                                            {
+                                                if (response.header.msg_type == MSG_DECLINE_TRADE)
+                                                {
+                                                    print_success("Trade declined");
+                                                }
+                                                else if (response.header.msg_type == MSG_ERROR)
+                                                {
+                                                    print_error("Failed to decline trade");
+                                                }
+                                                sleep(2);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // Outgoing trade - cancel
+                                printf("\nTrade #%d selected.\n", selected_trade_id);
+                                printf("Cancel this trade? (y/n): ");
+                                fflush(stdout);
+                                char action[32];
+                                if (fgets(action, sizeof(action), stdin) != NULL)
+                                {
+                                    if (action[0] == 'y' || action[0] == 'Y')
+                                    {
+                                        memset(&request, 0, sizeof(Message));
+                                        memset(&response, 0, sizeof(Message));
+                                        request.header.magic = 0xABCD;
+                                        request.header.msg_type = MSG_CANCEL_TRADE;
+                                        snprintf(request.payload, MAX_PAYLOAD_SIZE, "%d:%d", g_user_id, selected_trade_id);
+                                        request.header.msg_length = strlen(request.payload);
+
+                                        if (send_message_to_server(&request) == 0)
+                                        {
+                                            if (receive_message_from_server(&response) == 0)
+                                            {
+                                                if (response.header.msg_type == MSG_CANCEL_TRADE)
+                                                {
+                                                    print_success("Trade cancelled");
+                                                }
+                                                else if (response.header.msg_type == MSG_ERROR)
+                                                {
+                                                    print_error("Failed to cancel trade");
+                                                }
+                                                sleep(2);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            print_error("Trade not found");
+                            sleep(2);
+                        }
+                    }
+                    else
+                    {
+                        print_error("Invalid trade number");
+                        sleep(1);
                     }
                 }
             }
@@ -2820,6 +2853,8 @@ void show_quests_achievements()
             {
                 printf("%d. %s\n", i + 1, quest_names[quests[i].quest_type]);
                 printf("   Progress: %d/%d\n", quests[i].progress, quests[i].target);
+                printf("   Reward: %s$%.2f%s\n", COLOR_BRIGHT_GREEN, quest_rewards[quests[i].quest_type], COLOR_RESET);
+                
                 if (quests[i].is_completed)
                 {
                     if (quests[i].is_claimed)
@@ -2828,8 +2863,8 @@ void show_quests_achievements()
                     }
                     else
                     {
-                        printf("   Status: %s✓ Completed - Reward: $%.2f%s\n", COLOR_YELLOW, quest_rewards[quests[i].quest_type], COLOR_RESET);
-                        printf("   Press %d to claim reward\n", i + 1);
+                        printf("   Status: %s✓ Completed - Ready to Claim!%s\n", COLOR_YELLOW, COLOR_RESET);
+                        printf("   Press %d to claim reward ($%.2f)\n", i + 1, quest_rewards[quests[i].quest_type]);
                     }
                 }
                 else
@@ -2861,12 +2896,51 @@ void show_quests_achievements()
                         {
                             if (response.header.msg_type == MSG_CLAIM_QUEST_REWARD)
                             {
-                                print_success("Quest reward claimed!");
+                                // Parse reward amount from response if available
+                                float reward_amount = quest_rewards[quests[quest_num - 1].quest_type];
+                                if (response.header.msg_length > 0)
+                                {
+                                    float received_reward = 0.0f;
+                                    if (sscanf((char *)response.payload, "%f", &received_reward) == 1)
+                                    {
+                                        reward_amount = received_reward;
+                                    }
+                                }
+                                printf("\n%s✓ Quest reward claimed successfully!%s\n", COLOR_GREEN, COLOR_RESET);
+                                printf("%sYou received $%.2f!%s\n", COLOR_BRIGHT_GREEN, reward_amount, COLOR_RESET);
+                                
+                                // Refresh balance to show updated balance
+                                Message balance_request, balance_response;
+                                memset(&balance_request, 0, sizeof(Message));
+                                memset(&balance_response, 0, sizeof(Message));
+                                balance_request.header.magic = 0xABCD;
+                                balance_request.header.msg_type = MSG_GET_USER_PROFILE;
+                                snprintf(balance_request.payload, MAX_PAYLOAD_SIZE, "%d", g_user_id);
+                                balance_request.header.msg_length = strlen(balance_request.payload);
+                                
+                                if (send_message_to_server(&balance_request) == 0 && 
+                                    receive_message_from_server(&balance_response) == 0)
+                                {
+                                    if (balance_response.header.msg_type == MSG_USER_PROFILE_DATA)
+                                    {
+                                        User updated_user;
+                                        memcpy(&updated_user, balance_response.payload, sizeof(User));
+                                        printf("%sYour new balance: $%.2f%s\n\n", COLOR_CYAN, updated_user.balance, COLOR_RESET);
+                                    }
+                                }
+                                
+                                sleep(2);
                             }
                             else
                             {
                                 print_error("Failed to claim reward");
+                                sleep(1);
                             }
+                        }
+                        else
+                        {
+                            print_error("Network error while claiming reward");
+                            sleep(1);
                         }
                     }
                 }
@@ -3208,19 +3282,31 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // Initialize logger (log to file only, not terminal to avoid cluttering UI)
+    // Create logs directory if it doesn't exist
+    system("mkdir -p logs");
+    if (logger_init("logs/client.log", LOG_LEVEL_DEBUG) != 0)
+    {
+        fprintf(stderr, "Failed to initialize logger\n");
+        return 1;
+    }
+
     char *server_ip = argv[1];
     int port = atoi(argv[2]);
 
-    printf("=== CS2 Skin Trading Client ===\n");
-    printf("Connecting to %s:%d...\n", server_ip, port);
+    LOG_INFO("=== CS2 Skin Trading Client ===");
+    LOG_INFO("Connecting to %s:%d...", server_ip, port);
 
     // Connect to server
     if (connect_to_server(server_ip, port) != 0)
     {
+        LOG_ERROR("Failed to connect to server");
         print_error("Failed to connect to server");
+        logger_close();
         return 1;
     }
 
+    LOG_INFO("Connected to server successfully");
     print_success("Connected to server!");
     sleep(1);
 
@@ -3338,9 +3424,12 @@ int main(int argc, char *argv[])
     }
 
     // Cleanup
+    LOG_INFO("Disconnecting from server...");
     disconnect_from_server();
     clear_screen();
     printf("Goodbye!\n");
+    LOG_INFO("Client shutdown");
+    logger_close();
 
     return 0;
 }

@@ -14,10 +14,11 @@ phỏng có cung cầu thực tế.
 truyền thông, và quản lý cơ sở dữ liệu.
 
 - Kiến trúc: Client-Server với multi-threading
-- Ngôn ngữ: C thuần túy
-- Database: Binary file-based storage
-- Protocol: TCP Socket với custom message protocol
-- UI: Terminal-based với ANSI colors
+- Ngôn ngữ: C
+- Database: SQLite với schema đầy đủ
+- Protocol: TCP Socket với custom message protocol (79 message types)
+- UI: Terminal-based với ANSI colors và box drawing
+- Concurrency: Thread pool với pthread
 
 
 II. MỤC TIÊU
@@ -27,6 +28,7 @@ II. MỤC TIÊU
 3. Quản lý trạng thái người chơi, vật phẩm, và giao dịch một cách đồng bộ
 4. Tạo trải nghiệm game hấp dẫn với cơ chế kinh tế cân bằng
 5. Đảm bảo tính toàn vẹn dữ liệu trong môi trường đa luồng
+6. Cung cấp hệ thống phân tích và thống kê giao dịch chi tiết
 
 
 III. ĐỐI TƯỢNG NGƯỜI DÙNG
@@ -34,6 +36,7 @@ III. ĐỐI TƯỢNG NGƯỜI DÙNG
 - Người chơi thông thường: Mua bán, trao đổi vật phẩm, tham gia thị trường
 - Trader chuyên nghiệp: Phân tích giá cả, đầu tư, kiếm lời từ chênh lệch giá
 - Người mới: Học cách giao dịch, kiếm skins đầu tiên
+- Competitive players: Tham gia trading challenges, cạnh tranh trên leaderboards
 
 
 IV. GAMEPLAY - CÁCH CHƠI
@@ -41,6 +44,7 @@ IV. GAMEPLAY - CÁCH CHƠI
 A. KHỞI ĐẦU
    - Đăng ký tài khoản (username, password - SHA256)
    - Nhận $100 khởi điểm
+   - Đăng nhập và nhận daily login reward
 
 B. CÁC HOẠT ĐỘNG CHÍNH
 
@@ -48,42 +52,151 @@ B. CÁC HOẠT ĐỘNG CHÍNH
    - Browse danh sách skins đang bán
    - Mua ngay với giá niêm yết
    - Bán lên market (nhận 85%, hệ thống thu 15% phí)
+   - Listing fee: $1.00 khi đăng bán
    - Giá cả dao động theo cung cầu real-time
+   - Tìm kiếm skins theo tên
+   - Xem market history
+   - Items mua từ market bị trade lock 7 ngày
 
 2. P2P Trading (Giao dịch trực tiếp)
-   - Gửi trade offer (items + cash)
-   - Chấp nhận/từ chối offer
+   - Gửi trade offer (multi items + cash)
+   - Chấp nhận/từ chối/hủy offer
    - Trade tự động thực hiện (atomic operation)
    - Tất cả items sau trade bị khóa 7 ngày
+   - Trade history được lưu cho cả 2 người chơi
+   - Trade expires sau 15 phút nếu không accept
 
 3. Unboxing Cases (Mở hộp)
    - Mua case + key ($5-$10.50/case)
    - Unbox ngẫu nhiên skin theo xác suất:
      * Contraband (Knife/Glove): 0.26% - $2000-$10000
      * Covert (Red): 0.64% - $500-$2000
-     * Restricted (Purple): 3.20% - $20-$100
+     * Classified (Pink): 3.20% - $20-$100
+     * Restricted (Purple): 15.98% - $10-$50
      * Mil-Spec (Blue): 79.92% - $0.10-$2
-   - Animation spinning
-   - Trade lock 7 ngày cho skin vừa mua từ market
+   - Animation spinning với preview
+   - Trade lock 7 ngày cho skin vừa unbox
+   - Broadcast rare unbox (Contraband) to chat
 
 4. Daily Quests (Nhiệm vụ hàng ngày)
    - First Steps: +$15 (hoàn thành 3 trades)
-   - Market Explorer: +$10 (mua 5 items)
+   - Market Explorer: +$10 (mua 5 items từ market)
    - Lucky Gambler: +$25 + 1 key (unbox 5 cases)
    - Profit Maker: +$30 (kiếm $50 lợi nhuận)
    - Social Trader: +$50 (trade với 10 người khác)
+   - Progress tự động update
+   - Claim reward sau khi hoàn thành
 
-5. Trade Lock System
-   - Items vừa trade bị khóa 7 ngày
-   - Trong thời gian khóa: có thể bán market, không thể trade lại
-   - Sau 7 ngày tự động unlock
+5. Achievements (Thành tựu)
+   - First Trade Completed: +$20
+   - First Knife Unboxed: +$100
+   - Total Profit $1,000: +$200
+   - 100 Successful Trades: +$500
+   - Unlock và claim reward
+
+6. Daily Login Rewards
+   - Login streak: 1-7 ngày
+   - Reward tăng dần theo streak
+   - Reset streak nếu miss 1 ngày
+
+7. Trading Challenges (Thử thách giao dịch)
+   - 1v1 Profit Race Challenge
+   - Tạo challenge với opponent
+   - Duration: 30 phút - 24 giờ
+   - So sánh profit sau khi hết thời gian
+   - Cancel challenge với voting system:
+     * Cả 2 vote: cancel ngay
+     * 1 người vote sau 24h: runner phải trả $100 penalty
+   - Winner nhận reward
+
+8. Trade Analytics (Phân tích giao dịch)
+   - Trade History: Xem lịch sử trades đã hoàn thành
+   - Trade Statistics:
+     * Trades completed (P2P)
+     * Items bought/sold (Market)
+     * Average prices
+     * Net profit
+     * Win rate
+   - Balance History Graph: Biểu đồ balance theo thời gian (7-30 ngày)
+
+9. Leaderboards (Bảng xếp hạng)
+   - Top Traders: Top 10 người có nhiều trades nhất
+   - Luckiest Unboxers: Top 10 người unbox nhiều Contraband nhất
+   - Most Profitable: Top 10 người có profit cao nhất
+
+10. Chat System
+    - Global chat real-time
+    - Broadcast messages
+    - Chat history
+    - Auto-broadcast rare unbox events
+
+11. Price Tracking
+    - Price history cho từng skin
+    - Price trends (up/down/stable)
+    - Cập nhật giá real-time khi có giao dịch
+
+12. Report System
+    - Report người chơi khác
+    - Lý do report
+    - Admin có thể xử lý reports
+
+13. Trade Lock System
+    - Items vừa trade/mua từ market/unbox bị khóa 7 ngày
+    - Trong thời gian khóa: có thể bán market, không thể trade lại
+    - Sau 7 ngày tự động unlock
+    - Centralized setting: TRADE_LOCK_DURATION_DAYS = 7
+
 
 V. ĐẶC ĐIỂM KỸ THUẬT
 
-- Server: Multi-threaded với pthread
-- Database: Binary files với hash table indexing
-- Protocol: Custom TCP protocol với message types
-- Concurrency: Thread pool + select()
-- Security: SHA256 password hashing, session tokens
-- UI: ANSI colors, box drawing, progress bars
+A. SERVER
+   - Multi-threaded với pthread thread pool
+   - Xử lý nhiều client đồng thời
+   - Request handler routing theo message type
+   - Session management với tokens
+   - Database operations với SQLite
+   - Transaction logging đầy đủ
 
+B. CLIENT
+   - Modular architecture:
+     * client_auth.c: Authentication logic
+     * client_helpers.c: Common helper functions
+     * client.c: Main client logic
+     * ui.c: UI rendering
+     * network_client.c: Network communication
+   - Terminal UI với ANSI colors
+   - Box drawing và progress bars
+   - Real-time updates
+
+C. DATABASE (SQLite)
+   - Schema đầy đủ với foreign keys
+   - Tables: users, skins, inventories, trades, market_listings_v2, 
+     transaction_logs, quests, achievements, login_streaks, chat_messages,
+     price_history, trading_challenges, reports, sessions
+   - Indexes cho performance
+   - Auto-migration cho schema changes
+
+D. PROTOCOL
+   - Custom TCP message protocol
+   - 79 message types
+   - Message header: magic (0xABCD), type, length, sequence, checksum
+   - CRC32 checksum validation
+   - Error codes và error handling
+
+E. SECURITY
+   - SHA256 password hashing
+   - Session tokens (36 chars)
+   - User authentication
+   - Permission checks
+
+F. FEATURES
+   - Real-time price tracking
+   - Trade analytics và statistics
+   - Balance history với graph
+   - Trading challenges với voting
+   - Leaderboards
+   - Chat system
+   - Quest và achievement system
+   - Daily login rewards
+   - Report system
+   - Trade lock mechanism (7 ngày)

@@ -500,6 +500,8 @@ int db_init()
         "start_time INTEGER, "
         "end_time INTEGER, "
         "duration_minutes INTEGER NOT NULL, "
+        "challenger_cancel_vote INTEGER NOT NULL DEFAULT 0, "
+        "opponent_cancel_vote INTEGER NOT NULL DEFAULT 0, "
         "FOREIGN KEY (challenger_id) REFERENCES users(user_id), "
         "FOREIGN KEY (opponent_id) REFERENCES users(user_id)"
         ");"
@@ -545,6 +547,25 @@ int db_init()
         sqlite3_free(err_msg);
         sqlite3_close(db);
         return -1;
+    }
+    
+    // Migration: Add cancel vote columns if they don't exist
+    // SQLite doesn't support multiple ALTER TABLE in one statement, so do them separately
+    char *migration_err = NULL;
+    // Try to add challenger_cancel_vote column (will fail silently if it already exists)
+    sqlite3_exec(db, "ALTER TABLE trading_challenges ADD COLUMN challenger_cancel_vote INTEGER NOT NULL DEFAULT 0", 0, 0, &migration_err);
+    if (migration_err)
+    {
+        // Column might already exist, ignore error
+        sqlite3_free(migration_err);
+        migration_err = NULL;
+    }
+    // Try to add opponent_cancel_vote column (will fail silently if it already exists)
+    sqlite3_exec(db, "ALTER TABLE trading_challenges ADD COLUMN opponent_cancel_vote INTEGER NOT NULL DEFAULT 0", 0, 0, &migration_err);
+    if (migration_err)
+    {
+        // Column might already exist, ignore error
+        sqlite3_free(migration_err);
     }
 
     // Insert initial data if tables are empty
@@ -1057,22 +1078,29 @@ int db_load_trade(int trade_id, TradeOffer *out_trade)
 
     if (sqlite3_step(stmt) == SQLITE_ROW)
     {
+        // Column order from SELECT * FROM trades:
+        // 0: trade_id, 1: from_user_id, 2: to_user_id, 3: offered_skins, 4: offered_count,
+        // 5: offered_cash, 6: requested_skins, 7: requested_count, 8: requested_cash,
+        // 9: status, 10: created_at, 11: expires_at
         out_trade->trade_id = sqlite3_column_int(stmt, 0);
         out_trade->from_user_id = sqlite3_column_int(stmt, 1);
         out_trade->to_user_id = sqlite3_column_int(stmt, 2);
 
-        // Parse JSON arrays
         const char *offered_str = (char *)sqlite3_column_text(stmt, 3);
         out_trade->offered_count = sqlite3_column_int(stmt, 4);
         out_trade->offered_cash = sqlite3_column_double(stmt, 5);
         const char *requested_str = (char *)sqlite3_column_text(stmt, 6);
         out_trade->requested_count = sqlite3_column_int(stmt, 7);
         out_trade->requested_cash = sqlite3_column_double(stmt, 8);
-        out_trade->status = sqlite3_column_int(stmt, 9);
+        out_trade->status = (TradeStatus)sqlite3_column_int(stmt, 9);
         out_trade->created_at = sqlite3_column_int64(stmt, 10);
         out_trade->expires_at = sqlite3_column_int64(stmt, 11);
 
-        // Simple JSON parsing: "[1,2,3]" -> array
+        // Initialize arrays
+        memset(out_trade->offered_skins, 0, sizeof(out_trade->offered_skins));
+        memset(out_trade->requested_skins, 0, sizeof(out_trade->requested_skins));
+
+        // Parse JSON arrays
         if (offered_str && offered_str[0] == '[')
         {
             int idx = 0;
@@ -1088,6 +1116,16 @@ int db_load_trade(int trade_id, TradeOffer *out_trade)
                 else
                     p++;
             }
+            // Ensure count matches parsed items
+            if (idx != out_trade->offered_count)
+            {
+                out_trade->offered_count = idx;
+            }
+        }
+        else
+        {
+            // If no valid JSON, reset count
+            out_trade->offered_count = 0;
         }
 
         if (requested_str && requested_str[0] == '[')
@@ -1105,6 +1143,16 @@ int db_load_trade(int trade_id, TradeOffer *out_trade)
                 else
                     p++;
             }
+            // Ensure count matches parsed items
+            if (idx != out_trade->requested_count)
+            {
+                out_trade->requested_count = idx;
+            }
+        }
+        else
+        {
+            // If no valid JSON, reset count
+            out_trade->requested_count = 0;
         }
 
         sqlite3_finalize(stmt);
@@ -1179,8 +1227,9 @@ int db_get_user_trades(int user_id, TradeOffer *out_trades, int *count)
     if (!out_trades || !count)
         return -1;
 
-    // Optimized: use index on (from_user_id, to_user_id, status)
-    const char *sql = "SELECT * FROM trades WHERE (from_user_id = ? OR to_user_id = ?) AND status = ? ORDER BY created_at DESC";
+    // Get ALL trades (pending, accepted, declined, cancelled, expired) for the user
+    // Order by: pending first, then by created_at DESC
+    const char *sql = "SELECT * FROM trades WHERE (from_user_id = ? OR to_user_id = ?) ORDER BY CASE WHEN status = 0 THEN 0 ELSE 1 END, created_at DESC";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
@@ -1191,27 +1240,33 @@ int db_get_user_trades(int user_id, TradeOffer *out_trades, int *count)
 
     sqlite3_bind_int(stmt, 1, user_id);
     sqlite3_bind_int(stmt, 2, user_id);
-    sqlite3_bind_int(stmt, 3, TRADE_PENDING); // status = 0 (pending)
 
     int found = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW && found < 50)
     {
         TradeOffer *trade = &out_trades[found];
+        // Column order from SELECT * FROM trades:
+        // 0: trade_id, 1: from_user_id, 2: to_user_id, 3: offered_skins, 4: offered_count,
+        // 5: offered_cash, 6: requested_skins, 7: requested_count, 8: requested_cash,
+        // 9: status, 10: created_at, 11: expires_at
         trade->trade_id = sqlite3_column_int(stmt, 0);
         trade->from_user_id = sqlite3_column_int(stmt, 1);
         trade->to_user_id = sqlite3_column_int(stmt, 2);
 
         const char *offered_str = (char *)sqlite3_column_text(stmt, 3);
-        const char *requested_str = (char *)sqlite3_column_text(stmt, 4);
+        trade->offered_count = sqlite3_column_int(stmt, 4);
+        trade->offered_cash = sqlite3_column_double(stmt, 5);
+        const char *requested_str = (char *)sqlite3_column_text(stmt, 6);
+        trade->requested_count = sqlite3_column_int(stmt, 7);
+        trade->requested_cash = sqlite3_column_double(stmt, 8);
+        trade->status = (TradeStatus)sqlite3_column_int(stmt, 9);
+        trade->created_at = sqlite3_column_int64(stmt, 10);
+        trade->expires_at = sqlite3_column_int64(stmt, 11);
 
-        trade->offered_count = sqlite3_column_int(stmt, 5);
-        trade->offered_cash = sqlite3_column_double(stmt, 6);
-        trade->requested_count = sqlite3_column_int(stmt, 8);
-        trade->requested_cash = sqlite3_column_double(stmt, 9);
-        trade->status = sqlite3_column_int(stmt, 10);
-        trade->created_at = sqlite3_column_int64(stmt, 11);
-        trade->expires_at = sqlite3_column_int64(stmt, 12);
-
+        // Initialize arrays
+        memset(trade->offered_skins, 0, sizeof(trade->offered_skins));
+        memset(trade->requested_skins, 0, sizeof(trade->requested_skins));
+        
         // Parse JSON arrays
         if (offered_str && offered_str[0] == '[')
         {
@@ -1228,6 +1283,16 @@ int db_get_user_trades(int user_id, TradeOffer *out_trades, int *count)
                 else
                     p++;
             }
+            // Ensure count matches parsed items
+            if (idx != trade->offered_count)
+            {
+                trade->offered_count = idx;
+            }
+        }
+        else
+        {
+            // If no valid JSON, reset count
+            trade->offered_count = 0;
         }
 
         if (requested_str && requested_str[0] == '[')
@@ -1245,6 +1310,16 @@ int db_get_user_trades(int user_id, TradeOffer *out_trades, int *count)
                 else
                     p++;
             }
+            // Ensure count matches parsed items
+            if (idx != trade->requested_count)
+            {
+                trade->requested_count = idx;
+            }
+        }
+        else
+        {
+            // If no valid JSON, reset count
+            trade->requested_count = 0;
         }
 
         found++;
@@ -1347,24 +1422,41 @@ int db_log_transaction(TransactionLog *log)
     if (!log)
         return -1;
 
-    const char *sql = "INSERT INTO transaction_logs (log_id, type, user_id, details, timestamp) "
-                      "VALUES (?, ?, ?, ?, ?)";
+    if (!db)
+    {
+        // Can't use logger here as it might cause circular dependency
+        fprintf(stderr, "db_log_transaction: database connection is NULL\n");
+        return -1;
+    }
+
+    // log_id is AUTOINCREMENT, so we should use NULL or omit it
+    const char *sql = "INSERT INTO transaction_logs (type, user_id, details, timestamp) "
+                      "VALUES (?, ?, ?, ?)";
 
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
+    {
+        fprintf(stderr, "db_log_transaction: sqlite3_prepare_v2 failed: %s\n", sqlite3_errmsg(db));
         return -1;
+    }
 
-    sqlite3_bind_int(stmt, 1, log->log_id);
-    sqlite3_bind_int(stmt, 2, log->type);
-    sqlite3_bind_int(stmt, 3, log->user_id);
-    sqlite3_bind_text(stmt, 4, log->details, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 5, log->timestamp);
+    // Bind parameters (log_id is auto-generated, so skip it)
+    sqlite3_bind_int(stmt, 1, log->type);
+    sqlite3_bind_int(stmt, 2, log->user_id);
+    sqlite3_bind_text(stmt, 3, log->details, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 4, log->timestamp);
 
     rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE)
+    {
+        fprintf(stderr, "db_log_transaction: sqlite3_step failed: %s (rc=%d)\n", sqlite3_errmsg(db), rc);
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+    
     sqlite3_finalize(stmt);
-
-    return (rc == SQLITE_DONE) ? 0 : -1;
+    return 0;
 }
 
 // ==================== SESSION OPERATIONS ====================
@@ -2033,6 +2125,42 @@ int db_remove_listing_v2(int listing_id)
     return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
+// Load user's listing history (both sold and unsold)
+int db_load_user_listing_history(int user_id, MarketListing *out_listings, int *count)
+{
+    if (!out_listings || !count || user_id <= 0)
+        return -1;
+
+    const char *sql = "SELECT listing_id, seller_id, instance_id, price, listed_at, is_sold "
+                      "FROM market_listings_v2 WHERE seller_id = ? ORDER BY listed_at DESC LIMIT 100";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+    {
+        *count = 0;
+        return 0;
+    }
+
+    sqlite3_bind_int(stmt, 1, user_id);
+
+    int found = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && found < 100)
+    {
+        MarketListing *listing = &out_listings[found];
+        listing->listing_id = sqlite3_column_int(stmt, 0);
+        listing->seller_id = sqlite3_column_int(stmt, 1);
+        listing->skin_id = sqlite3_column_int(stmt, 2); // Store instance_id in skin_id field
+        listing->price = sqlite3_column_double(stmt, 3);
+        listing->listed_at = sqlite3_column_int64(stmt, 4);
+        listing->is_sold = sqlite3_column_int(stmt, 5);
+        found++;
+    }
+
+    *count = found;
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
 // ==================== TRADE LOCK OPERATIONS ====================
 
 int db_check_trade_lock(int instance_id, int *is_locked)
@@ -2053,7 +2181,7 @@ int db_check_trade_lock(int instance_id, int *is_locked)
         int is_tradable = sqlite3_column_int(stmt, 0);
         time_t acquired_at = sqlite3_column_int64(stmt, 1);
         time_t now = time(NULL);
-        time_t lock_duration = 1 * 24 * 60 * 60; // 1 day in seconds (changed from 7 days)
+        time_t lock_duration = TRADE_LOCK_DURATION_SECONDS;
 
         if (is_tradable == 0 || (now - acquired_at) < lock_duration)
         {
@@ -2092,7 +2220,7 @@ int db_apply_trade_lock(int instance_id)
 int db_unlock_expired_trades()
 {
     time_t now = time(NULL);
-    time_t lock_duration = 1 * 24 * 60 * 60; // 1 day (changed from 7 days)
+    time_t lock_duration = TRADE_LOCK_DURATION_SECONDS;
     time_t threshold = now - lock_duration;
 
     const char *sql = "UPDATE skin_instances SET is_tradable = 1 WHERE is_tradable = 0 AND acquired_at <= ?";
@@ -2457,8 +2585,10 @@ int db_load_user_quests(int user_id, Quest *out_quests, int *count)
     if (!out_quests || !count)
         return -1;
 
+    // Load all quests that are either not completed OR completed but not claimed yet
+    // This allows players to see and claim completed quest rewards
     const char *sql = "SELECT quest_id, user_id, quest_type, progress, target, is_completed, is_claimed, started_at, completed_at "
-                      "FROM quests WHERE user_id = ? AND is_completed = 0 ORDER BY quest_type";
+                      "FROM quests WHERE user_id = ? AND is_claimed = 0 ORDER BY quest_type";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
