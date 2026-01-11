@@ -17,13 +17,17 @@ int get_user_achievements(int user_id, Achievement *out_achievements, int *count
     return db_load_user_achievements(user_id, out_achievements, count);
 }
 
-// Unlock achievement
+// Unlock achievement (with atomic check-and-unlock to prevent race conditions)
 int unlock_achievement(int user_id, AchievementType achievement_type)
 {
     if (user_id <= 0)
         return -1;
 
-    // Check if already unlocked
+    // BEGIN TRANSACTION - Atomic check-and-unlock to prevent race conditions
+    if (db_begin_transaction() != 0)
+        return -1;
+
+    // Check if already unlocked (within transaction)
     Achievement achievements[10];
     int count = 0;
     if (db_load_user_achievements(user_id, achievements, &count) == 0)
@@ -31,7 +35,10 @@ int unlock_achievement(int user_id, AchievementType achievement_type)
         for (int i = 0; i < count; i++)
         {
             if (achievements[i].achievement_type == achievement_type && achievements[i].is_unlocked)
+            {
+                db_rollback_transaction();
                 return 0; // Already unlocked
+            }
         }
     }
 
@@ -43,7 +50,22 @@ int unlock_achievement(int user_id, AchievementType achievement_type)
     achievement.is_claimed = 0;
     achievement.unlocked_at = time(NULL);
 
-    return db_save_achievement(&achievement);
+    int result = db_save_achievement(&achievement);
+    if (result == 0)
+    {
+        // COMMIT TRANSACTION - Unlock succeeded
+        if (db_commit_transaction() != 0)
+        {
+            db_rollback_transaction();
+            return -1;
+        }
+        return 0;
+    }
+    else
+    {
+        db_rollback_transaction();
+        return -1;
+    }
 }
 
 // Claim achievement reward

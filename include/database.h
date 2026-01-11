@@ -114,4 +114,30 @@ int db_save_price_history(int definition_id, float price, int transaction_type);
 int db_get_price_history_24h(int definition_id, PriceHistoryEntry *out_history, int *count);
 int db_get_price_24h_ago(int definition_id, float *out_price);
 
+// Transaction management (for atomic operations)
+int db_begin_transaction(void);
+int db_commit_transaction(void);
+int db_rollback_transaction(void);
+
+// Atomic listing operations (with row locking)
+// This function atomically checks if listing is available and marks it as sold
+// Returns 0 if successful (listing was available and marked as sold)
+// Returns -1 if listing not found
+// Returns -2 if listing already sold (race condition detected)
+int db_atomic_mark_listing_sold(int listing_id, int *seller_id, int *instance_id, float *price);
+
+// Atomic trade operations (with row locking)
+// Atomically check if trade is pending and update status to ACCEPTED
+// Returns 0 if successful (trade was pending and marked as accepted)
+// Returns -1 if trade not found
+// Returns -2 if trade already processed (race condition detected)
+int db_atomic_accept_trade(int trade_id);
+
+// Atomic login reward operations
+// Atomically check if reward already claimed today and claim it
+// Returns 0 if successful (reward claimed)
+// Returns -1 if user not found
+// Returns -2 if already claimed today (race condition detected)
+int db_atomic_claim_daily_reward(int user_id, float *reward_amount, int *streak_day);
+
 #endif // DATABASE_H

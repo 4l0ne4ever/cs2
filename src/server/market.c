@@ -6,6 +6,7 @@
 #include "../include/types.h"
 #include "../include/quests.h"
 #include "../include/price_tracking.h"
+#include "../include/trading_challenges.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,10 +69,17 @@ int list_skin_on_market(int user_id, int instance_id, float price)
     if (user.balance < LISTING_FEE)
         return -5; // Insufficient funds for listing fee
 
+    // BEGIN TRANSACTION - All operations must succeed or all rollback
+    if (db_begin_transaction() != 0)
+        return -8; // Failed to begin transaction
+
     // Deduct listing fee
     user.balance -= LISTING_FEE;
     if (db_update_user(&user) != 0)
+    {
+        db_rollback_transaction();
         return -6; // Failed to update balance
+    }
 
     // Note: NO trade lock when listing on market
     // Item is removed from inventory and listed on market
@@ -79,52 +87,84 @@ int list_skin_on_market(int user_id, int instance_id, float price)
     // Trade lock only applies when buyer purchases item from market
 
     // Remove from inventory (item is now on market)
-    db_remove_from_inventory(user_id, instance_id);
+    if (db_remove_from_inventory(user_id, instance_id) != 0)
+    {
+        db_rollback_transaction();
+        return -7; // Failed to remove from inventory
+    }
 
     // Create listing
     int listing_id;
     if (db_save_listing_v2(user_id, instance_id, price, &listing_id) != 0)
     {
-        // Rollback: refund listing fee
-        user.balance += LISTING_FEE;
-        db_update_user(&user);
+        db_rollback_transaction();
         return -3; // Failed to create listing
+    }
+
+    // COMMIT TRANSACTION - All operations succeeded
+    if (db_commit_transaction() != 0)
+    {
+        db_rollback_transaction();
+        return -9; // Failed to commit transaction
     }
 
     return 0;
 }
 
-// Buy skin from market
+// Buy skin from market (with transaction and race condition protection)
 int buy_from_market(int buyer_id, int listing_id)
 {
     if (buyer_id <= 0 || listing_id <= 0)
         return -1;
 
-    // Get listing info
-    int seller_id, instance_id, is_sold;
+    // BEGIN TRANSACTION - All operations must succeed or all rollback
+    if (db_begin_transaction() != 0)
+        return -12; // Failed to begin transaction
+
+    // Get listing info and atomically mark as sold (prevents race condition)
+    int seller_id, instance_id;
     float price;
-
-    if (db_get_listing_v2(listing_id, &seller_id, &instance_id, &price, &is_sold) != 0)
+    int atomic_result = db_atomic_mark_listing_sold(listing_id, &seller_id, &instance_id, &price);
+    
+    if (atomic_result == -1)
+    {
+        db_rollback_transaction();
         return -1; // Listing not found
-
-    if (is_sold)
-        return -2; // Already sold
+    }
+    
+    if (atomic_result == -2)
+    {
+        db_rollback_transaction();
+        return -2; // Already sold (race condition detected)
+    }
 
     if (seller_id == buyer_id)
+    {
+        db_rollback_transaction();
         return -3; // Cannot buy own listing
+    }
 
     // Get buyer balance
     User buyer;
     if (db_load_user(buyer_id, &buyer) != 0)
+    {
+        db_rollback_transaction();
         return -4; // Buyer not found
+    }
 
     if (buyer.balance < price)
+    {
+        db_rollback_transaction();
         return -5; // Insufficient funds
+    }
 
     // Get seller info
     User seller;
     if (db_load_user(seller_id, &seller) != 0)
+    {
+        db_rollback_transaction();
         return -6; // Seller not found
+    }
 
     // Calculate fee and seller payout
     float fee = price * MARKET_FEE_RATE;
@@ -138,24 +178,21 @@ int buy_from_market(int buyer_id, int listing_id)
     seller.balance += seller_payout;
 
     if (db_update_user(&buyer) != 0)
+    {
+        db_rollback_transaction();
         return -7; // Failed to update buyer
+    }
 
     if (db_update_user(&seller) != 0)
+    {
+        db_rollback_transaction();
         return -8; // Failed to update seller
-
-    // Mark listing as sold first
-    if (db_mark_listing_sold(listing_id) != 0)
-        return -9; // Failed to mark listing as sold
+    }
 
     // Transfer instance ownership
     if (db_update_skin_instance_owner(instance_id, buyer_id) != 0)
     {
-        // Rollback: restore listing and balances
-        db_mark_listing_sold(listing_id); // Revert
-        buyer.balance += price;
-        seller.balance -= seller_payout;
-        db_update_user(&buyer);
-        db_update_user(&seller);
+        db_rollback_transaction();
         return -10; // Failed to transfer ownership
     }
 
@@ -163,13 +200,7 @@ int buy_from_market(int buyer_id, int listing_id)
     db_remove_from_inventory(seller_id, instance_id);
     if (db_add_to_inventory(buyer_id, instance_id) != 0)
     {
-        // Rollback: restore ownership and balances
-        db_update_skin_instance_owner(instance_id, seller_id);
-        db_mark_listing_sold(listing_id); // Revert
-        buyer.balance += price;
-        seller.balance -= seller_payout;
-        db_update_user(&buyer);
-        db_update_user(&seller);
+        db_rollback_transaction();
         return -11; // Failed to add to inventory
     }
 
@@ -192,7 +223,15 @@ int buy_from_market(int buyer_id, int listing_id)
         save_price_history(definition_id, price, 1);
     }
 
-    // Log transaction
+    // COMMIT TRANSACTION - All operations succeeded, make changes permanent
+    if (db_commit_transaction() != 0)
+    {
+        // Commit failed - rollback everything
+        db_rollback_transaction();
+        return -13; // Failed to commit transaction
+    }
+
+    // Log transaction (after commit - these are not critical for atomicity)
     TransactionLog log;
     log.log_id = 0; // Auto-increment
     log.type = LOG_MARKET_BUY;
@@ -209,7 +248,7 @@ int buy_from_market(int buyer_id, int listing_id)
     log2.timestamp = time(NULL);
     db_log_transaction(&log2);
 
-    // Update quests
+    // Update quests (after commit - these are not critical for atomicity)
     // Market Explorer quest: Buy 5 items from market
     update_quest_progress(buyer_id, QUEST_MARKET_EXPLORER, 1);
     
@@ -220,6 +259,11 @@ int buy_from_market(int buyer_id, int listing_id)
     // Check quest completion
     check_quest_completion(buyer_id);
     check_quest_completion(seller_id);
+
+    // Update active trading challenges (profit from market transactions)
+    // Market buy/sell affects profit: balance changes, inventory changes
+    update_user_active_challenges(buyer_id);
+    update_user_active_challenges(seller_id);
 
     return 0;
 }

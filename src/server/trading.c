@@ -5,6 +5,7 @@
 #include "../include/types.h"
 #include "../include/quests.h"
 #include "../include/achievements.h"
+#include "../include/trading_challenges.h"
 #include "../include/logger.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -182,13 +183,36 @@ int accept_trade(int user_id, int trade_id)
         }
     }
 
-    // Execute trade
-    if (execute_trade(&trade) != 0)
-        return -5; // Execution failed
+    // BEGIN TRANSACTION - All operations must succeed or all rollback
+    if (db_begin_transaction() != 0)
+        return -19; // Failed to begin transaction
 
-    // Update trade status
-    trade.status = TRADE_ACCEPTED;
-    db_update_trade(&trade);
+    // Atomically accept trade (prevents race condition when multiple clients accept same trade)
+    int atomic_result = db_atomic_accept_trade(trade_id);
+    if (atomic_result == -1)
+    {
+        db_rollback_transaction();
+        return -1; // Trade not found
+    }
+    if (atomic_result == -2)
+    {
+        db_rollback_transaction();
+        return -3; // Trade already processed (race condition detected)
+    }
+
+    // Execute trade (within transaction)
+    if (execute_trade_internal(&trade) != 0)
+    {
+        db_rollback_transaction();
+        return -5; // Execution failed
+    }
+
+    // COMMIT TRANSACTION - All operations succeeded
+    if (db_commit_transaction() != 0)
+    {
+        db_rollback_transaction();
+        return -20; // Failed to commit transaction
+    }
 
     // Calculate trade values for analytics
     float offered_value = trade.offered_cash;
@@ -492,14 +516,11 @@ int validate_trade(TradeOffer *offer)
     return 0;
 }
 
-// Execute trade (atomic operation)
-int execute_trade(TradeOffer *offer)
+// Execute trade internal (without transaction - caller manages transaction)
+static int execute_trade_internal(TradeOffer *offer)
 {
     if (!offer)
         return -1;
-
-    // Start transaction (SQLite auto-commits, but we'll do manual checks)
-    // In a real implementation, we'd use BEGIN TRANSACTION
 
     // Transfer offered items from from_user to to_user
     for (int i = 0; i < offer->offered_count; i++)
@@ -509,15 +530,25 @@ int execute_trade(TradeOffer *offer)
             continue;
 
         // Remove from from_user inventory
-        db_remove_from_inventory(offer->from_user_id, instance_id);
+        if (db_remove_from_inventory(offer->from_user_id, instance_id) != 0)
+        {
+            db_rollback_transaction();
+            return -2; // Failed to remove from inventory
+        }
 
         // Update owner
         if (db_update_skin_instance_owner(instance_id, offer->to_user_id) != 0)
-            return -2; // Failed to transfer ownership
+        {
+            db_rollback_transaction();
+            return -3; // Failed to transfer ownership
+        }
 
         // Add to to_user inventory
         if (db_add_to_inventory(offer->to_user_id, instance_id) != 0)
-            return -3; // Failed to add to inventory
+        {
+            db_rollback_transaction();
+            return -4; // Failed to add to inventory
+        }
 
         // Apply trade lock to traded items (7 days lock)
         db_apply_trade_lock(instance_id);
@@ -531,15 +562,25 @@ int execute_trade(TradeOffer *offer)
             continue;
 
         // Remove from to_user inventory
-        db_remove_from_inventory(offer->to_user_id, instance_id);
+        if (db_remove_from_inventory(offer->to_user_id, instance_id) != 0)
+        {
+            db_rollback_transaction();
+            return -5; // Failed to remove from inventory
+        }
 
         // Update owner
         if (db_update_skin_instance_owner(instance_id, offer->from_user_id) != 0)
-            return -4; // Failed to transfer ownership
+        {
+            db_rollback_transaction();
+            return -6; // Failed to transfer ownership
+        }
 
         // Add to from_user inventory
         if (db_add_to_inventory(offer->from_user_id, instance_id) != 0)
-            return -5; // Failed to add to inventory
+        {
+            db_rollback_transaction();
+            return -7; // Failed to add to inventory
+        }
 
         // Apply trade lock to traded items (7 days lock)
         db_apply_trade_lock(instance_id);
@@ -550,37 +591,76 @@ int execute_trade(TradeOffer *offer)
     {
         User from_user, to_user;
         if (db_load_user(offer->from_user_id, &from_user) != 0)
-            return -6;
+        {
+            db_rollback_transaction();
+            return -8;
+        }
         if (db_load_user(offer->to_user_id, &to_user) != 0)
-            return -7;
+        {
+            db_rollback_transaction();
+            return -9;
+        }
+
+        if (from_user.balance < offer->offered_cash)
+        {
+            db_rollback_transaction();
+            return -10; // Insufficient funds
+        }
 
         from_user.balance -= offer->offered_cash;
         to_user.balance += offer->offered_cash;
 
         if (db_update_user(&from_user) != 0)
-            return -8;
+        {
+            db_rollback_transaction();
+            return -11;
+        }
         if (db_update_user(&to_user) != 0)
-            return -9;
+        {
+            db_rollback_transaction();
+            return -12;
+        }
     }
 
     if (offer->requested_cash > 0)
     {
         User from_user, to_user;
         if (db_load_user(offer->from_user_id, &from_user) != 0)
-            return -10;
+        {
+            db_rollback_transaction();
+            return -13;
+        }
         if (db_load_user(offer->to_user_id, &to_user) != 0)
-            return -11;
+        {
+            db_rollback_transaction();
+            return -14;
+        }
+
+        if (to_user.balance < offer->requested_cash)
+        {
+            db_rollback_transaction();
+            return -15; // Insufficient funds
+        }
 
         to_user.balance -= offer->requested_cash;
         from_user.balance += offer->requested_cash;
 
         if (db_update_user(&from_user) != 0)
-            return -12;
+        {
+            db_rollback_transaction();
+            return -16;
+        }
         if (db_update_user(&to_user) != 0)
-            return -13;
+        {
+            db_rollback_transaction();
+            return -17;
+        }
     }
 
-    // Update quests and achievements
+    // NOTE: Transaction commit is handled by caller
+    // This function assumes transaction is already started
+
+    // Update quests and achievements (after commit - these are not critical for atomicity)
     // First Steps quest: Complete 3 trades
     update_quest_progress(offer->from_user_id, QUEST_FIRST_STEPS, 1);
     update_quest_progress(offer->to_user_id, QUEST_FIRST_STEPS, 1);
@@ -598,6 +678,11 @@ int execute_trade(TradeOffer *offer)
     // Check quest completion
     check_quest_completion(offer->from_user_id);
     check_quest_completion(offer->to_user_id);
+
+    // Update active trading challenges (profit from trading)
+    // Trading affects profit: balance changes (cash), inventory changes (items)
+    update_user_active_challenges(offer->from_user_id);
+    update_user_active_challenges(offer->to_user_id);
 
     return 0;
 }

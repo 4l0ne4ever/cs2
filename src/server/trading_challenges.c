@@ -403,31 +403,76 @@ int cancel_challenge(int challenge_id, int user_id)
         if (elapsed >= CHALLENGE_CANCEL_TIMEOUT_SECONDS)
         {
             // Timeout reached - challenger (runner) loses money and challenge is cancelled
-            User challenger;
-            if (db_load_user(challenge.challenger_id, &challenger) == 0)
+            // Use transaction to ensure atomicity
+            if (db_begin_transaction() == 0)
             {
-                // Apply penalty
-                challenger.balance -= CHALLENGE_CANCEL_PENALTY_AMOUNT;
-                if (challenger.balance < 0.0f)
-                    challenger.balance = 0.0f; // Don't allow negative balance
-                
-                db_update_user(&challenger);
+                User challenger;
+                if (db_load_user(challenge.challenger_id, &challenger) == 0)
+                {
+                    // Apply penalty
+                    challenger.balance -= CHALLENGE_CANCEL_PENALTY_AMOUNT;
+                    if (challenger.balance < 0.0f)
+                        challenger.balance = 0.0f; // Don't allow negative balance
+                    
+                    if (db_update_user(&challenger) == 0)
+                    {
+                        // Cancel challenge
+                        const char *cancel_sql = "UPDATE trading_challenges SET status = ? WHERE challenge_id = ?";
+                        rc = sqlite3_prepare_v2(db, cancel_sql, -1, &stmt, 0);
+                        if (rc == SQLITE_OK)
+                        {
+                            sqlite3_bind_int(stmt, 1, CHALLENGE_CANCELLED);
+                            sqlite3_bind_int(stmt, 2, challenge_id);
+                            if (sqlite3_step(stmt) == SQLITE_DONE)
+                            {
+                                sqlite3_finalize(stmt);
+                                if (db_commit_transaction() == 0)
+                                {
+                                    return 0; // Success: timeout reached, challenger penalized, challenge cancelled
+                                }
+                            }
+                            else
+                            {
+                                sqlite3_finalize(stmt);
+                            }
+                        }
+                    }
+                }
+                // Rollback on any failure
+                db_rollback_transaction();
             }
-            
-            // Cancel challenge
-            const char *cancel_sql = "UPDATE trading_challenges SET status = ? WHERE challenge_id = ?";
-            rc = sqlite3_prepare_v2(db, cancel_sql, -1, &stmt, 0);
-            if (rc == SQLITE_OK)
-            {
-                sqlite3_bind_int(stmt, 1, CHALLENGE_CANCELLED);
-                sqlite3_bind_int(stmt, 2, challenge_id);
-                sqlite3_step(stmt);
-                sqlite3_finalize(stmt);
-            }
-            return 0; // Success: timeout reached, challenger penalized, challenge cancelled
+            return -4; // Failed to process timeout cancellation
         }
     }
     
     // Only one vote, no timeout yet - wait for other player's vote
     return 0; // Success: vote recorded, waiting for other player
+}
+
+// Helper function: Update all active challenges for a user
+// This is called automatically after actions that affect profit (unbox, market, trading)
+// Profit is calculated from net worth (balance + inventory value), which includes:
+// - Unboxing: balance decreases (cost), inventory increases (value)
+// - Market buy/sell: balance changes, inventory changes
+// - Trading: balance changes (cash), inventory changes (items)
+void update_user_active_challenges(int user_id)
+{
+    if (user_id <= 0)
+        return;
+    
+    TradingChallenge challenges[50];
+    int count = 0;
+    
+    // Get all active challenges for this user
+    if (get_user_challenges(user_id, challenges, &count) != 0)
+        return;
+    
+    // Update progress for each active challenge
+    for (int i = 0; i < count; i++)
+    {
+        if (challenges[i].status == CHALLENGE_ACTIVE)
+        {
+            update_challenge_progress(challenges[i].challenge_id);
+        }
+    }
 }

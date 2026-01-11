@@ -139,7 +139,7 @@ int get_user_quests(int user_id, Quest *out_quests, int *count)
     return db_load_user_quests(user_id, out_quests, count);
 }
 
-// Update quest progress
+// Update quest progress (with atomic update to prevent race conditions)
 // NOTE: This function only marks quest as completed when progress >= target.
 // It does NOT automatically claim the reward - player must manually claim via claim_quest_reward()
 int update_quest_progress(int user_id, QuestType quest_type, int increment)
@@ -147,12 +147,20 @@ int update_quest_progress(int user_id, QuestType quest_type, int increment)
     if (user_id <= 0 || increment <= 0)
         return -1;
 
+    // BEGIN TRANSACTION - Atomic update to prevent race conditions
+    if (db_begin_transaction() != 0)
+        return -1;
+
     Quest quests[10];
     int count = 0;
     if (db_load_user_quests(user_id, quests, &count) != 0)
+    {
+        db_rollback_transaction();
         return -1;
+    }
 
     // Find quest of this type
+    int found = 0;
     for (int i = 0; i < count; i++)
     {
         if (quests[i].quest_type == quest_type && !quests[i].is_completed)
@@ -168,11 +176,29 @@ int update_quest_progress(int user_id, QuestType quest_type, int increment)
                 LOG_INFO("[QUESTS] Quest completed (not claimed): user_id=%d, quest_id=%d, quest_type=%d, progress=%d/%d",
                          user_id, quests[i].quest_id, quests[i].quest_type, quests[i].progress, quests[i].target);
             }
-            return db_update_quest(&quests[i]);
+            
+            int result = db_update_quest(&quests[i]);
+            if (result == 0)
+            {
+                found = 1;
+                // COMMIT TRANSACTION - Update succeeded
+                if (db_commit_transaction() != 0)
+                {
+                    db_rollback_transaction();
+                    return -1;
+                }
+                return 0;
+            }
+            else
+            {
+                db_rollback_transaction();
+                return -1;
+            }
         }
     }
 
-    return -1;
+    db_rollback_transaction();
+    return -1; // Quest not found
 }
 
 // Claim quest reward

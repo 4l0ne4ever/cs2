@@ -8,6 +8,7 @@
 #include "../include/achievements.h"
 #include "../include/chat.h"
 #include "../include/request_handler.h"
+#include "../include/trading_challenges.h"
 #include "../include/logger.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,10 +130,15 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
         return ERR_INSUFFICIENT_FUNDS; // Insufficient funds
     }
 
-    // Step 0.3: Deduct balance BEFORE unboxing (atomic operation)
+    // BEGIN TRANSACTION - All operations must succeed or all rollback
+    if (db_begin_transaction() != 0)
+        return -8; // Failed to begin transaction
+
+    // Step 0.3: Deduct balance BEFORE unboxing (within transaction)
     user.balance -= total_cost;
     if (db_update_user(&user) != 0)
     {
+        db_rollback_transaction();
         return -4; // Failed to update balance
     }
 
@@ -154,9 +160,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
 
     if (rarity_count == 0)
     {
-        // Rollback balance deduction on error
-        user.balance += total_cost;
-        db_update_user(&user);
+        db_rollback_transaction();
         return -5; // No skins available in this case
     }
 
@@ -248,9 +252,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
 
     if (db_result != 0 || skin_count == 0)
     {
-        // Rollback balance deduction on error
-        user.balance += total_cost;
-        db_update_user(&user);
+        db_rollback_transaction();
         return -5; // No skins with this rarity available in this case
     }
 
@@ -264,9 +266,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
 
     if (db_load_skin_definition_with_rarity(definition_id, def_name, &def_base_price, &def_rarity) != 0)
     {
-        // Rollback balance deduction on error
-        user.balance += total_cost;
-        db_update_user(&user);
+        db_rollback_transaction();
         return -6; // Failed to load skin definition
     }
 
@@ -303,20 +303,25 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     int instance_id = 0;
     if (db_create_skin_instance(definition_id, final_rarity, wear, pattern_seed, is_stattrak, user_id, &instance_id) != 0)
     {
-        // Rollback balance deduction on error
-        user.balance += total_cost;
-        db_update_user(&user);
+        db_rollback_transaction();
         return -6; // Failed to create skin instance
     }
 
     // Step 8: Add to inventory
     if (db_add_to_inventory(user_id, instance_id) != 0)
     {
-        // Rollback: remove instance and restore balance
-        // Note: In production, you might want to keep the instance but just not add to inventory
-        user.balance += total_cost;
-        db_update_user(&user);
+        db_rollback_transaction();
         return -7; // Failed to add to inventory
+    }
+
+    // Apply trade lock to unboxed item (7 days lock)
+    db_apply_trade_lock(instance_id);
+
+    // COMMIT TRANSACTION - All critical operations succeeded
+    if (db_commit_transaction() != 0)
+    {
+        db_rollback_transaction();
+        return -9; // Failed to commit transaction
     }
 
     // Note: Unboxed items are NOT trade locked - only items listed on market are locked
@@ -397,6 +402,10 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
 
     // Check quest completion
     check_quest_completion(user_id);
+
+    // Step 12.5: Update active trading challenges (profit from unboxing)
+    // Unboxing affects profit: cost (balance decrease) vs value (inventory increase)
+    update_user_active_challenges(user_id);
 
     // Step 13: Broadcast rare drops (Contraband/Covert items)
     if (final_rarity == RARITY_CONTRABAND || final_rarity == RARITY_COVERT)

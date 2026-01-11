@@ -56,4 +56,8 @@ int complete_challenge(int challenge_id, int *winner_id);
 // Cancel challenge
 int cancel_challenge(int challenge_id, int user_id);
 
+// Helper function: Update all active challenges for a user
+// Called automatically after actions that affect profit (unbox, market, trading)
+void update_user_active_challenges(int user_id);
+
 #endif // TRADING_CHALLENGES_H

@@ -3,6 +3,7 @@
 #include "../include/database.h"
 #include "../include/types.h"
 #include "../include/price_tracking.h"
+#include "../include/login_rewards.h"
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -301,6 +302,14 @@ int db_init()
 
     // Enable foreign key constraints
     sqlite3_exec(db, "PRAGMA foreign_keys = ON;", 0, 0, 0);
+    
+    // Enable WAL mode for better concurrent read performance
+    // WAL allows multiple readers while one writer
+    sqlite3_exec(db, "PRAGMA journal_mode=WAL;", 0, 0, 0);
+    
+    // Set busy timeout to 5 seconds (wait if database is locked)
+    // This prevents "Database is locked" errors when multiple threads write
+    sqlite3_busy_timeout(db, 5000);
 
     // Create schema if tables don't exist
     const char *schema_sql =
@@ -2949,4 +2958,294 @@ int db_get_price_24h_ago(int definition_id, float *out_price)
 
     sqlite3_finalize(stmt);
     return -1; // No price history found
+}
+
+// ==================== TRANSACTION MANAGEMENT ====================
+
+int db_begin_transaction(void)
+{
+    if (!db)
+        return -1;
+    
+    char *err_msg = 0;
+    int rc = sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION", 0, 0, &err_msg);
+    if (rc != SQLITE_OK)
+    {
+        if (err_msg)
+        {
+            fprintf(stderr, "db_begin_transaction failed: %s\n", err_msg);
+            sqlite3_free(err_msg);
+        }
+        return -1;
+    }
+    return 0;
+}
+
+int db_commit_transaction(void)
+{
+    if (!db)
+        return -1;
+    
+    char *err_msg = 0;
+    int rc = sqlite3_exec(db, "COMMIT", 0, 0, &err_msg);
+    if (rc != SQLITE_OK)
+    {
+        if (err_msg)
+        {
+            fprintf(stderr, "db_commit_transaction failed: %s\n", err_msg);
+            sqlite3_free(err_msg);
+        }
+        return -1;
+    }
+    return 0;
+}
+
+int db_rollback_transaction(void)
+{
+    if (!db)
+        return -1;
+    
+    char *err_msg = 0;
+    int rc = sqlite3_exec(db, "ROLLBACK", 0, 0, &err_msg);
+    if (rc != SQLITE_OK)
+    {
+        if (err_msg)
+        {
+            fprintf(stderr, "db_rollback_transaction failed: %s\n", err_msg);
+            sqlite3_free(err_msg);
+        }
+        return -1;
+    }
+    return 0;
+}
+
+// ==================== ATOMIC LISTING OPERATIONS ====================
+
+// Atomically check if listing is available and mark it as sold
+// This prevents race conditions when multiple clients try to buy the same item
+// Uses UPDATE with WHERE condition to atomically check-and-set
+int db_atomic_mark_listing_sold(int listing_id, int *seller_id, int *instance_id, float *price)
+{
+    if (!seller_id || !instance_id || !price)
+        return -1;
+    
+    if (!db)
+        return -1;
+    
+    // First, get listing info (within transaction if one exists)
+    const char *select_sql = "SELECT seller_id, instance_id, price, is_sold "
+                             "FROM market_listings_v2 WHERE listing_id = ?";
+    sqlite3_stmt *select_stmt;
+    int rc = sqlite3_prepare_v2(db, select_sql, -1, &select_stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+    
+    sqlite3_bind_int(select_stmt, 1, listing_id);
+    
+    if (sqlite3_step(select_stmt) != SQLITE_ROW)
+    {
+        sqlite3_finalize(select_stmt);
+        return -1; // Listing not found
+    }
+    
+    *seller_id = sqlite3_column_int(select_stmt, 0);
+    *instance_id = sqlite3_column_int(select_stmt, 1);
+    *price = sqlite3_column_double(select_stmt, 2);
+    int is_sold = sqlite3_column_int(select_stmt, 3);
+    
+    sqlite3_finalize(select_stmt);
+    
+    if (is_sold)
+        return -2; // Already sold
+    
+    // Atomically update: only update if is_sold = 0 (not sold yet)
+    // This is atomic at database level - only one thread can succeed
+    const char *update_sql = "UPDATE market_listings_v2 SET is_sold = 1 "
+                             "WHERE listing_id = ? AND is_sold = 0";
+    sqlite3_stmt *update_stmt;
+    rc = sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+    
+    sqlite3_bind_int(update_stmt, 1, listing_id);
+    
+    rc = sqlite3_step(update_stmt);
+    sqlite3_finalize(update_stmt);
+    
+    if (rc != SQLITE_DONE)
+        return -1;
+    
+    // Check if any row was actually updated
+    int changes = sqlite3_changes(db);
+    if (changes == 0)
+    {
+        // No row updated - means another thread already marked it as sold
+        return -2; // Race condition: already sold by another thread
+    }
+    
+    return 0; // Success: atomically marked as sold
+}
+
+// ==================== ATOMIC TRADE OPERATIONS ====================
+
+// Atomically check if trade is pending and update status to ACCEPTED
+// This prevents race conditions when multiple clients try to accept the same trade
+int db_atomic_accept_trade(int trade_id)
+{
+    if (trade_id <= 0)
+        return -1;
+    
+    if (!db)
+        return -1;
+    
+    // Atomically update: only update if status = TRADE_PENDING (not processed yet)
+    // This is atomic at database level - only one thread can succeed
+    const char *update_sql = "UPDATE trades SET status = ? WHERE trade_id = ? AND status = ?";
+    sqlite3_stmt *update_stmt;
+    int rc = sqlite3_prepare_v2(db, update_sql, -1, &update_stmt, 0);
+    if (rc != SQLITE_OK)
+        return -1;
+    
+    sqlite3_bind_int(update_stmt, 1, TRADE_ACCEPTED);
+    sqlite3_bind_int(update_stmt, 2, trade_id);
+    sqlite3_bind_int(update_stmt, 3, TRADE_PENDING);
+    
+    rc = sqlite3_step(update_stmt);
+    sqlite3_finalize(update_stmt);
+    
+    if (rc != SQLITE_DONE)
+        return -1;
+    
+    // Check if any row was actually updated
+    int changes = sqlite3_changes(db);
+    if (changes == 0)
+    {
+        // No row updated - means trade not found or already processed
+        // Check if trade exists
+        const char *check_sql = "SELECT trade_id FROM trades WHERE trade_id = ?";
+        sqlite3_stmt *check_stmt;
+        rc = sqlite3_prepare_v2(db, check_sql, -1, &check_stmt, 0);
+        if (rc == SQLITE_OK)
+        {
+            sqlite3_bind_int(check_stmt, 1, trade_id);
+            if (sqlite3_step(check_stmt) == SQLITE_ROW)
+            {
+                sqlite3_finalize(check_stmt);
+                return -2; // Trade exists but already processed (race condition)
+            }
+            sqlite3_finalize(check_stmt);
+        }
+        return -1; // Trade not found
+    }
+    
+    return 0; // Success: atomically marked as accepted
+}
+
+// ==================== ATOMIC LOGIN REWARD OPERATIONS ====================
+
+// Atomically check if reward already claimed today and claim it
+// This prevents race conditions when multiple threads try to claim the same reward
+int db_atomic_claim_daily_reward(int user_id, float *reward_amount, int *streak_day)
+{
+    if (user_id <= 0 || !reward_amount || !streak_day)
+        return -1;
+    
+    if (!db)
+        return -1;
+    
+    // BEGIN TRANSACTION
+    if (db_begin_transaction() != 0)
+        return -1;
+    
+    // Load login streak
+    LoginStreak streak;
+    if (db_load_login_streak(user_id, &streak) != 0)
+    {
+        // Create new streak if doesn't exist
+        streak.user_id = user_id;
+        streak.current_streak = 0;
+        streak.last_login_date = 0;
+        streak.last_reward_date = 0;
+    }
+    
+    time_t now = time(NULL);
+    struct tm *tm_now = localtime(&now);
+    tm_now->tm_hour = 0;
+    tm_now->tm_min = 0;
+    tm_now->tm_sec = 0;
+    time_t today = mktime(tm_now);
+    
+    // Check if already claimed today (atomic check within transaction)
+    if (streak.last_reward_date == today)
+    {
+        db_rollback_transaction();
+        return -2; // Already claimed today (race condition detected)
+    }
+    
+    // Calculate streak
+    int days_diff = (today - streak.last_login_date) / (24 * 3600);
+    
+    if (days_diff == 1)
+    {
+        streak.current_streak++;
+        if (streak.current_streak > 7)
+            streak.current_streak = 1;
+    }
+    else if (days_diff > 1)
+    {
+        streak.current_streak = 1;
+    }
+    else if (streak.current_streak == 0)
+    {
+        streak.current_streak = 1;
+    }
+    
+    // Calculate reward
+    float reward = 0.0f;
+    switch (streak.current_streak)
+    {
+    case 1: reward = REWARD_DAY_1; break;
+    case 2: reward = REWARD_DAY_2; break;
+    case 3: reward = REWARD_DAY_3; break;
+    case 4: reward = REWARD_DAY_4; break;
+    case 5: reward = REWARD_DAY_5; break;
+    case 6: reward = REWARD_DAY_6; break;
+    case 7: reward = REWARD_DAY_7; break;
+    default: reward = REWARD_DAY_1; streak.current_streak = 1; break;
+    }
+    
+    // Update user balance
+    User user;
+    if (db_load_user(user_id, &user) != 0)
+    {
+        db_rollback_transaction();
+        return -1;
+    }
+    
+    user.balance += reward;
+    if (db_update_user(&user) != 0)
+    {
+        db_rollback_transaction();
+        return -1;
+    }
+    
+    // Update streak
+    streak.last_login_date = today;
+    streak.last_reward_date = today;
+    if (db_save_login_streak(&streak) != 0)
+    {
+        db_rollback_transaction();
+        return -1;
+    }
+    
+    // COMMIT TRANSACTION
+    if (db_commit_transaction() != 0)
+    {
+        db_rollback_transaction();
+        return -1;
+    }
+    
+    *reward_amount = reward;
+    *streak_day = streak.current_streak;
+    return 0; // Success: atomically claimed reward
 }
