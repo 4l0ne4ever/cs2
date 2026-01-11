@@ -314,8 +314,8 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
         return -7; // Failed to add to inventory
     }
 
-    // Apply trade lock to unboxed item (7 days lock)
-    db_apply_trade_lock(instance_id);
+    // Note: Unboxed items are NOT trade locked - only items purchased from market
+    // or received from trade offers are trade locked (7 days)
 
     // COMMIT TRANSACTION - All critical operations succeeded
     if (db_commit_transaction() != 0)
@@ -323,8 +323,6 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
         db_rollback_transaction();
         return -9; // Failed to commit transaction
     }
-
-    // Note: Unboxed items are NOT trade locked - only items listed on market are locked
 
     // Step 9: Calculate price using definition's rarity
     // Calculate price: base_price * rarity_multiplier * wear_multiplier
@@ -349,7 +347,7 @@ int unbox_case(int user_id, int case_id, Skin *out_skin)
     out_skin->current_price = current_price;
     out_skin->owner_id = user_id;
     out_skin->acquired_at = time(NULL);
-    out_skin->is_tradable = 0; // trade lock 7 ngày
+    out_skin->is_tradable = 1; // Unboxed items are immediately tradable (no trade lock)
 
     // Step 10: Calculate profit if skin value > unbox cost
     float profit = 0.0f;

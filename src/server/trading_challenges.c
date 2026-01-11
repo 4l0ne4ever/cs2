@@ -10,7 +10,8 @@
 #include <string.h>
 #include <time.h>
 
-// Calculate net worth for a user (balance + inventory value)
+// Calculate net worth for a user
+// Net worth = cash balance + total value of all items in inventory
 static float calculate_net_worth(int user_id)
 {
     User user;
@@ -53,7 +54,8 @@ int create_profit_race_challenge(int challenger_id, int opponent_id, int duratio
     if (challenger_id == opponent_id)
         return -2; // Cannot challenge yourself
     
-    // Get starting balances
+    // Get starting net worth for both players
+    // Net Worth = Balance + Inventory Value (used as baseline for profit calculation)
     User challenger, opponent;
     if (db_load_user(challenger_id, &challenger) != 0)
         return -3;
@@ -203,6 +205,19 @@ int get_user_challenges(int user_id, TradingChallenge *out_challenges, int *coun
 }
 
 // Update challenge progress (calculate current profit)
+// 
+// Profit Formula (simple and consistent):
+//   Profit = Current Net Worth - Start Net Worth
+//   where Net Worth = Balance + Inventory Value
+//
+// This means:
+//   Profit = (Current Balance - Start Balance) + (Current Inventory Value - Start Inventory Value)
+//
+// Examples:
+//   - Start: $100 balance, $0 inventory → Net Worth = $100
+//   - Unbox $10 case, get $50 item: $90 balance, $50 inventory → Net Worth = $140 → Profit = +$40
+//   - Buy $100 item: $0 balance, $100 inventory → Net Worth = $100 → Profit = $0
+//   - Sell $100 item for $120: $120 balance, $0 inventory → Net Worth = $120 → Profit = +$20
 int update_challenge_progress(int challenge_id)
 {
     TradingChallenge challenge;
@@ -216,7 +231,7 @@ int update_challenge_progress(int challenge_id)
     float challenger_current = calculate_net_worth(challenge.challenger_id);
     float opponent_current = calculate_net_worth(challenge.opponent_id);
     
-    // Calculate profit
+    // Calculate profit: Profit = Current Net Worth - Start Net Worth
     float challenger_profit = challenger_current - challenge.challenger_start_balance;
     float opponent_profit = opponent_current - challenge.opponent_start_balance;
     
@@ -277,6 +292,11 @@ int accept_challenge(int challenge_id, int user_id)
     return (rc == SQLITE_DONE) ? 0 : -4;
 }
 
+// Challenge reward/penalty constants
+#define CHALLENGE_CANCEL_TIMEOUT_SECONDS (24 * 60 * 60) // 24 hours
+#define CHALLENGE_CANCEL_PENALTY_AMOUNT 100.0f // $100 penalty for runner
+#define CHALLENGE_WINNER_REWARD_AMOUNT 500.0f // $500 reward for winner
+
 // Complete challenge and determine winner
 int complete_challenge(int challenge_id, int *winner_id)
 {
@@ -302,16 +322,41 @@ int complete_challenge(int challenge_id, int *winner_id)
     else
         *winner_id = 0; // Tie
     
+    // BEGIN TRANSACTION - Award reward to winner
+    if (db_begin_transaction() != 0)
+        return -3;
+    
+    // Award reward to winner (if not a tie)
+    if (*winner_id > 0)
+    {
+        User winner;
+        if (db_load_user(*winner_id, &winner) == 0)
+        {
+            winner.balance += CHALLENGE_WINNER_REWARD_AMOUNT;
+            if (db_update_user(&winner) != 0)
+            {
+                db_rollback_transaction();
+                return -3;
+            }
+        }
+    }
+    
     // Update status
     const char *sql = "UPDATE trading_challenges SET status = ?, end_time = ? WHERE challenge_id = ?";
     sqlite3_stmt *stmt;
     sqlite3 *db = db_get_connection();
     if (!db)
+    {
+        db_rollback_transaction();
         return -3;
+    }
     
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
+    {
+        db_rollback_transaction();
         return -3;
+    }
     
     sqlite3_bind_int(stmt, 1, CHALLENGE_COMPLETED);
     sqlite3_bind_int64(stmt, 2, time(NULL));
@@ -320,14 +365,24 @@ int complete_challenge(int challenge_id, int *winner_id)
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     
-    return (rc == SQLITE_DONE) ? 0 : -3;
+    if (rc != SQLITE_DONE)
+    {
+        db_rollback_transaction();
+        return -3;
+    }
+    
+    // COMMIT TRANSACTION - Reward awarded and challenge completed
+    if (db_commit_transaction() != 0)
+    {
+        db_rollback_transaction();
+        return -3;
+    }
+    
+    return 0;
 }
 
 // Cancel challenge - requires vote from both players
 // If only one player votes and challenge is active for >24 hours, challenger (runner) loses money
-#define CHALLENGE_CANCEL_TIMEOUT_SECONDS (24 * 60 * 60) // 24 hours
-#define CHALLENGE_CANCEL_PENALTY_AMOUNT 100.0f // $100 penalty for runner
-
 int cancel_challenge(int challenge_id, int user_id)
 {
     TradingChallenge challenge;
@@ -450,11 +505,15 @@ int cancel_challenge(int challenge_id, int user_id)
 }
 
 // Helper function: Update all active challenges for a user
-// This is called automatically after actions that affect profit (unbox, market, trading)
-// Profit is calculated from net worth (balance + inventory value), which includes:
-// - Unboxing: balance decreases (cost), inventory increases (value)
-// - Market buy/sell: balance changes, inventory changes
-// - Trading: balance changes (cash), inventory changes (items)
+// This is called automatically after actions that affect net worth (unbox, market buy/sell, trading)
+//
+// Profit is calculated as: Profit = Current Net Worth - Start Net Worth
+// Net Worth = Balance + Inventory Value
+//
+// All actions that change balance or inventory automatically update profit:
+// - Unboxing: Changes balance (cost) and inventory (item value)
+// - Market buy/sell: Changes balance and inventory
+// - Trading: Changes balance (cash) and inventory (items)
 void update_user_active_challenges(int user_id)
 {
     if (user_id <= 0)

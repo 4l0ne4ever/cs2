@@ -14,6 +14,9 @@
 
 #define TRADE_EXPIRY_SECONDS (15 * 60) // 15 minutes
 
+// Forward declaration
+static int execute_trade_internal(TradeOffer *offer);
+
 // Send trade offer
 int send_trade_offer(int from_user, int to_user, TradeOffer *offer)
 {
@@ -217,14 +220,14 @@ int accept_trade(int user_id, int trade_id)
     // Calculate trade values for analytics
     float offered_value = trade.offered_cash;
     float requested_value = trade.requested_cash;
-    
+
     // Calculate value of offered items
     for (int i = 0; i < trade.offered_count; i++)
     {
         int instance_id = trade.offered_skins[i];
         if (instance_id <= 0)
             continue;
-        
+
         int definition_id;
         SkinRarity rarity;
         WearCondition wear;
@@ -232,21 +235,21 @@ int accept_trade(int user_id, int trade_id)
         int owner_id;
         time_t acquired_at;
         int is_tradable;
-        
+
         if (db_load_skin_instance(instance_id, &definition_id, &rarity, &wear, &pattern_seed, &is_stattrak, &owner_id, &acquired_at, &is_tradable) == 0)
         {
             float price = db_calculate_skin_price(definition_id, rarity, wear);
             offered_value += price;
         }
     }
-    
+
     // Calculate value of requested items
     for (int i = 0; i < trade.requested_count; i++)
     {
         int instance_id = trade.requested_skins[i];
         if (instance_id <= 0)
             continue;
-        
+
         int definition_id;
         SkinRarity rarity;
         WearCondition wear;
@@ -254,7 +257,7 @@ int accept_trade(int user_id, int trade_id)
         int owner_id;
         time_t acquired_at;
         int is_tradable;
-        
+
         if (db_load_skin_instance(instance_id, &definition_id, &rarity, &wear, &pattern_seed, &is_stattrak, &owner_id, &acquired_at, &is_tradable) == 0)
         {
             float price = db_calculate_skin_price(definition_id, rarity, wear);
@@ -271,45 +274,45 @@ int accept_trade(int user_id, int trade_id)
     log.user_id = user_id; // user_id is the receiver (to_user_id)
     // Format: "Accepted trade offer X: gave $Y (items + cash), received $Z (items + cash), profit $W"
     float profit_receiver = offered_value - requested_value; // Receiver's profit
-    snprintf(log.details, sizeof(log.details), "Accepted trade offer %d: gave $%.2f (items + cash), received $%.2f (items + cash), profit $%.2f", 
+    snprintf(log.details, sizeof(log.details), "Accepted trade offer %d: gave $%.2f (items + cash), received $%.2f (items + cash), profit $%.2f",
              trade_id, requested_value, offered_value, profit_receiver);
     log.timestamp = time(NULL);
-    LOG_DEBUG("accept_trade: Logging transaction for receiver (user_id=%d, trade_id=%d): '%s'", 
+    LOG_DEBUG("accept_trade: Logging transaction for receiver (user_id=%d, trade_id=%d): '%s'",
               user_id, trade_id, log.details);
     int log_result1 = db_log_transaction(&log);
     if (log_result1 != 0)
     {
-        LOG_ERROR("accept_trade: Failed to log transaction for receiver (user_id=%d, trade_id=%d): db_log_transaction returned %d", 
-                 user_id, trade_id, log_result1);
+        LOG_ERROR("accept_trade: Failed to log transaction for receiver (user_id=%d, trade_id=%d): db_log_transaction returned %d",
+                  user_id, trade_id, log_result1);
     }
     else
     {
-        LOG_DEBUG("accept_trade: Successfully logged transaction for receiver (user_id=%d, trade_id=%d)", 
-                 user_id, trade_id);
+        LOG_DEBUG("accept_trade: Successfully logged transaction for receiver (user_id=%d, trade_id=%d)",
+                  user_id, trade_id);
     }
-    
+
     // Also log for the sender (from_user_id)
     // Sender gave offered_value (what they're giving to receiver) and received requested_value (what receiver gave them)
     TransactionLog log2;
     log2.log_id = 0;
     log2.type = LOG_TRADE;
-    log2.user_id = trade.from_user_id; // FIX: Should be from_user_id, not to_user_id
+    log2.user_id = trade.from_user_id;                     // FIX: Should be from_user_id, not to_user_id
     float profit_sender = requested_value - offered_value; // Sender's profit
-    snprintf(log2.details, sizeof(log2.details), "Accepted trade offer %d: gave $%.2f (items + cash), received $%.2f (items + cash), profit $%.2f", 
+    snprintf(log2.details, sizeof(log2.details), "Accepted trade offer %d: gave $%.2f (items + cash), received $%.2f (items + cash), profit $%.2f",
              trade_id, offered_value, requested_value, profit_sender);
     log2.timestamp = time(NULL);
-    LOG_DEBUG("accept_trade: Logging transaction for sender (user_id=%d, trade_id=%d): '%s'", 
+    LOG_DEBUG("accept_trade: Logging transaction for sender (user_id=%d, trade_id=%d): '%s'",
               trade.from_user_id, trade_id, log2.details);
     int log_result2 = db_log_transaction(&log2);
     if (log_result2 != 0)
     {
-        LOG_ERROR("accept_trade: Failed to log transaction for sender (user_id=%d, trade_id=%d): db_log_transaction returned %d", 
-                 trade.from_user_id, trade_id, log_result2);
+        LOG_ERROR("accept_trade: Failed to log transaction for sender (user_id=%d, trade_id=%d): db_log_transaction returned %d",
+                  trade.from_user_id, trade_id, log_result2);
     }
     else
     {
-        LOG_DEBUG("accept_trade: Successfully logged transaction for sender (user_id=%d, trade_id=%d)", 
-                 trade.from_user_id, trade_id);
+        LOG_DEBUG("accept_trade: Successfully logged transaction for sender (user_id=%d, trade_id=%d)",
+                  trade.from_user_id, trade_id);
     }
 
     return 0;
@@ -433,7 +436,7 @@ int validate_trade(TradeOffer *offer)
 
         if (owner_id != offer->from_user_id)
             return -3; // Not owner
-        
+
         // Check if item is already in a pending trade
         if (db_is_instance_in_pending_trade(instance_id))
             return -13; // Item is already in a pending trade offer
@@ -464,7 +467,7 @@ int validate_trade(TradeOffer *offer)
 
         if (owner_id != offer->to_user_id)
             return -6; // Not owner
-        
+
         // Check if item is already in a pending trade
         if (db_is_instance_in_pending_trade(instance_id))
             return -14; // Item is already in a pending trade offer
@@ -497,12 +500,12 @@ int validate_trade(TradeOffer *offer)
 
     // Validate: must offer something OR request something (or both)
     // Use valid counts (excluding invalid instance_ids <= 0)
-    if (valid_offered_count == 0 && offer->offered_cash == 0.0f && 
+    if (valid_offered_count == 0 && offer->offered_cash == 0.0f &&
         valid_requested_count == 0 && offer->requested_cash == 0.0f)
     {
         return -12; // Empty trade
     }
-    
+
     // If counts don't match valid items, reject (client sent invalid data)
     if (offer->offered_count > 0 && valid_offered_count == 0)
     {
@@ -664,17 +667,17 @@ static int execute_trade_internal(TradeOffer *offer)
     // First Steps quest: Complete 3 trades
     update_quest_progress(offer->from_user_id, QUEST_FIRST_STEPS, 1);
     update_quest_progress(offer->to_user_id, QUEST_FIRST_STEPS, 1);
-    
+
     // Social Trader quest: Trade with different users
     // Track unique users traded with (simplified - just increment)
     update_quest_progress(offer->from_user_id, QUEST_SOCIAL_TRADER, 1);
     update_quest_progress(offer->to_user_id, QUEST_SOCIAL_TRADER, 1);
-    
+
     // Check achievements
     // First Trade achievement
     unlock_achievement(offer->from_user_id, ACHIEVEMENT_FIRST_TRADE);
     unlock_achievement(offer->to_user_id, ACHIEVEMENT_FIRST_TRADE);
-    
+
     // Check quest completion
     check_quest_completion(offer->from_user_id);
     check_quest_completion(offer->to_user_id);
@@ -713,4 +716,3 @@ void check_expired_locks()
 {
     db_unlock_expired_trades();
 }
-
